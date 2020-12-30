@@ -63,8 +63,10 @@ target_link_libraries(magnum-bullet PRIVATE
     Magnum::Shaders
     Magnum::Trade
     MagnumIntegration::Bullet
+    Bullet::Collision
     Bullet::Dynamics)
 
+# target_include_directories(magnum-bullet PRIVATE ${BULLET_INCLUDE_DIR})
 install(TARGETS magnum-bullet DESTINATION ${MAGNUM_BINARY_INSTALL_DIR})
 
 # Make the executable a default target to build & run in Visual Studio
