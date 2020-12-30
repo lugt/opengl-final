@@ -10,3 +10,8 @@ CMakeLists.txt.user*
 # Android-specific stuff
 .externalNativeBuild
 .gradle
+
+cmake-build*
+.idea
+.vscode
+.vs
