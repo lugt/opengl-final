@@ -95,7 +95,6 @@ namespace Magnum {
       // Functional Parts
       void shootOnClick(MouseEvent &event);
 
-
       GL::Mesh                        _box{NoCreate}, _sphere{NoCreate};
       GL::Buffer                      _boxInstanceBuffer{
         NoCreate},                    _sphereInstanceBuffer{NoCreate};
@@ -348,8 +347,8 @@ namespace Magnum {
             GL::Renderer::DepthFunction::LessOrEqual);
         }
 
-//        _debugDraw.setTransformationProjectionMatrix(
-//          _camera->projectionMatrix() * _camera->cameraMatrix());
+        _debugDraw.setTransformationProjectionMatrix(
+          _projectionMatrix * _arcballCamera->camera().cameraMatrix());
         _bWorld.debugDrawWorld();
 
         if (_drawCubes) {
@@ -483,7 +482,7 @@ namespace Magnum {
       if(event.key() == KeyEvent::Key::B) {
         _drawBoundingBoxes ^= true;
 
-      } else if(event.key() == KeyEvent::Key::O) {
+      } else if(event.key() == KeyEvent::Key::M) {
         if((_collisionDetectionByOctree ^= true))
           Debug{} << "Collision detection using octree";
         else
@@ -513,6 +512,10 @@ namespace Magnum {
       /** @todo replace once https://github.com/mosra/magnum/pull/419 is in */
       SDL_CaptureMouse(SDL_TRUE);
       _arcballCamera->initTransformation(event.position());
+      if (!(event.modifiers() & MouseMoveEvent::Modifier::Shift) &&
+          (event.modifiers() & MouseMoveEvent::Modifier::Alt)) {
+        shootOnClick(event);
+      }
       event.setAccepted();
       redraw(); /* camera has changed, redraw! */
     }
@@ -526,9 +529,13 @@ namespace Magnum {
     void BulletExample::mouseMoveEvent(MouseMoveEvent& event) {
       if(!event.buttons()) return;
 
-      if(event.modifiers() & MouseMoveEvent::Modifier::Shift)
+      if((event.modifiers() & MouseMoveEvent::Modifier::Shift) &&
+         !(event.modifiers() & MouseMoveEvent::Modifier::Alt)) {
         _arcballCamera->translate(event.position());
-      else _arcballCamera->rotate(event.position());
+      } else if (!(event.modifiers() & MouseMoveEvent::Modifier::Shift) &&
+        (event.modifiers() & MouseMoveEvent::Modifier::Alt)) {
+        // ...
+      } else _arcballCamera->rotate(event.position());
 
       event.setAccepted();
       redraw(); /* camera has changed, redraw! */
