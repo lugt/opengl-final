@@ -37,6 +37,7 @@
 #include <Magnum/BulletIntegration/Integration.h>
 #include <Magnum/BulletIntegration/MotionState.h>
 #include <Magnum/BulletIntegration/DebugDraw.h>
+#include <Magnum/DebugTools/FrameProfiler.h>
 #include <Magnum/GL/DefaultFramebuffer.h>
 #include <Magnum/GL/Mesh.h>
 #include <Magnum/GL/Renderer.h>
@@ -47,17 +48,24 @@
 #include <Magnum/Platform/Sdl2Application.h>
 #include <Magnum/Primitives/Cube.h>
 #include <Magnum/Primitives/UVSphere.h>
+#include <Magnum/Primitives/Icosphere.h>
 #include <Magnum/SceneGraph/Camera.h>
 #include <Magnum/SceneGraph/Drawable.h>
 #include <Magnum/SceneGraph/MatrixTransformation3D.h>
 #include <Magnum/SceneGraph/Scene.h>
 #include <Magnum/Shaders/Phong.h>
+#include <Magnum/Shaders/Flat.h>
 #include <Magnum/Trade/MeshData.h>
+
+// Smooth Arcball Camera
+#include "../arcball/ArcBall.h"
+#include "../arcball/ArcBallCamera.h"
 
 namespace Magnum {
   namespace LabFinal {
 
     using namespace Math::Literals;
+    using namespace Magnum::Examples;
 
     typedef SceneGraph::Object<SceneGraph::MatrixTransformation3D> Object3D;
     typedef SceneGraph::Scene<SceneGraph::MatrixTransformation3D>  Scene3D;
@@ -73,11 +81,20 @@ namespace Magnum {
       explicit BulletExample(const Arguments &arguments);
 
     private:
+      // Display Parts & Event Handling
       void drawEvent() override;
-
       void keyPressEvent(KeyEvent &event) override;
-
       void mousePressEvent(MouseEvent &event) override;
+      void cameraKeyPressEvent(KeyEvent &event);
+      void drawTreeNodeBoundingBoxes();
+      void mouseScrollEvent(MouseScrollEvent& event) override;
+      void mouseMoveEvent(MouseMoveEvent& event) override;
+      void mouseReleaseEvent(MouseEvent&) override;
+      void viewportEvent(ViewportEvent& event) override;
+
+      // Functional Parts
+      void shootOnClick(MouseEvent &event);
+
 
       GL::Mesh                        _box{NoCreate}, _sphere{NoCreate};
       GL::Buffer                      _boxInstanceBuffer{
@@ -91,17 +108,31 @@ namespace Magnum {
       btCollisionDispatcher               _bDispatcher{&_bCollisionConfig};
       btSequentialImpulseConstraintSolver _bSolver;
 
+      /* boolean-valued options */
+      bool _collisionDetectionByOctree = true;
+      bool _isPausing                  = false;
+      bool _drawBoundingBoxes          = false;
+      bool _animation                  = false;
+
+
+      /* Octree and boundary boxes */
+      Containers::Pointer<int> _octree;
+
+      /* Profiling */
+      DebugTools::GLFrameProfiler _profiler{
+        DebugTools::GLFrameProfiler::Value::FrameTime |
+        DebugTools::GLFrameProfiler::Value::CpuDuration, 180};
+
       /* The world has to live longer than the scene because RigidBody
          instances have to remove themselves from it on destruction */
       btDiscreteDynamicsWorld _bWorld{&_bDispatcher, &_bBroadphase, &_bSolver,
                                       &_bCollisionConfig};
 
-      Scene3D                     _scene;
-      SceneGraph::Camera3D        *_camera;
-      SceneGraph::DrawableGroup3D _drawables;
-      Timeline                    _timeline;
-
-      Object3D *_cameraRig, *_cameraObject;
+      Scene3D                             _scene;
+      Containers::Optional<ArcBallCamera> _arcballCamera;
+      Matrix4                             _projectionMatrix;
+      SceneGraph::DrawableGroup3D         _drawables;
+      Timeline                            _timeline;
 
       btBoxShape    _bBoxShape{{0.5f, 0.5f, 0.5f}};
       btSphereShape _bSphereShape{0.25f};
@@ -186,18 +217,20 @@ namespace Magnum {
         }
       }
 
-      /* Camera setup */
-      (*(_cameraRig    = new Object3D{&_scene}))
-        .translate(Vector3::yAxis(3.0f))
-        .rotateY(40.0_degf);
-      (*(_cameraObject = new Object3D{_cameraRig}))
-        .translate(Vector3::zAxis(20.0f))
-        .rotateX(-25.0_degf);
-      (_camera         = new SceneGraph::Camera3D(*_cameraObject))
-        ->setAspectRatioPolicy(SceneGraph::AspectRatioPolicy::Extend)
-        .setProjectionMatrix(
-          Matrix4::perspectiveProjection(50.0_degf, 1.0f, 0.0001f, 1000.0f))
-        .setViewport(GL::defaultFramebuffer.viewport().size());
+      /* Setup camera */
+      {
+        const Vector3 eye = Vector3::zAxis(5.0f);
+        const Vector3 viewCenter;
+        const Vector3 up = Vector3::yAxis();
+        const Deg fov = 45.0_degf;
+        _arcballCamera.emplace(_scene, eye, viewCenter, up, fov,
+                               windowSize(), framebufferSize());
+        _arcballCamera->setLagging(0.85f);
+
+        _projectionMatrix = Matrix4::perspectiveProjection(fov,
+                                                           Vector2{framebufferSize()}.aspectRatio(), 0.01f, 100.0f);
+      }
+
 
       /* Create an instanced shader */
       _shader = Shaders::Phong{
@@ -209,8 +242,7 @@ namespace Magnum {
 
       /* Box and sphere mesh, with an (initially empty) instance buffer */
       _box                  = MeshTools::compile(Primitives::cubeSolid());
-      _sphere               = MeshTools::compile(
-        Primitives::uvSphereSolid(16, 32));
+      _sphere               = MeshTools::compile(Primitives::uvSphereSolid(16, 32));
       _boxInstanceBuffer    = GL::Buffer{};
       _sphereInstanceBuffer = GL::Buffer{};
       _box.addVertexBufferInstanced(_boxInstanceBuffer, 1, 0,
@@ -278,13 +310,21 @@ namespace Magnum {
       /* Step bullet simulation */
       _bWorld.stepSimulation(_timeline.previousFrameDuration(), 5);
 
+
       if (_drawCubes) {
         /* Populate instance data with transformations and colors */
         arrayResize(_boxInstanceData, 0);
         arrayResize(_sphereInstanceData, 0);
-        _camera->draw(_drawables);
 
-        _shader.setProjectionMatrix(_camera->projectionMatrix());
+        /* Call arcball update in every frame. This will do nothing if the camera
+         has not been changed. Otherwise, camera transformation will be
+         propagated into the camera objects. */
+        bool camChanged = _arcballCamera->update();
+        _arcballCamera->draw(_drawables);
+        _shader.setProjectionMatrix(_projectionMatrix)
+               .setTransformationMatrix(_arcballCamera->viewMatrix())
+               .setNormalMatrix(_arcballCamera->viewMatrix().normalMatrix());
+
 
         /* Upload instance data to the GPU (orphaning the previous buffer
            contents) and draw all cubes in one call, and all spheres (if any)
@@ -308,8 +348,8 @@ namespace Magnum {
             GL::Renderer::DepthFunction::LessOrEqual);
         }
 
-        _debugDraw.setTransformationProjectionMatrix(
-          _camera->projectionMatrix() * _camera->cameraMatrix());
+//        _debugDraw.setTransformationProjectionMatrix(
+//          _camera->projectionMatrix() * _camera->cameraMatrix());
         _bWorld.debugDrawWorld();
 
         if (_drawCubes) {
@@ -317,26 +357,22 @@ namespace Magnum {
         }
       }
 
+      /* Update camera before drawing instances */
+      bool moving = _arcballCamera->updateTransformation();
+
       swapBuffers();
-      if (!pausing) {
+      if (!_isPausing) {
         _timeline.nextFrame();
+        moving = true;
       }
-      redraw();
+
+      /* If the camera is moving or the animation is running, redraw immediately */
+      if(moving || _animation) redraw();
     }
 
     void BulletExample::keyPressEvent(KeyEvent &event) {
-      /* Movement */
-      if (event.key() == KeyEvent::Key::Down) {
-        _cameraObject->rotateX(5.0_degf);
-      } else if (event.key() == KeyEvent::Key::Up) {
-        _cameraObject->rotateX(-5.0_degf);
-      } else if (event.key() == KeyEvent::Key::Left) {
-        _cameraRig->rotateY(-5.0_degf);
-      } else if (event.key() == KeyEvent::Key::Right) {
-        _cameraRig->rotateY(5.0_degf);
-
-        /* Toggling draw modes */
-      } else if (event.key() == KeyEvent::Key::D) {
+      /* Toggling draw modes */
+      if (event.key() == KeyEvent::Key::D) {
         if (_drawCubes && _drawDebug) {
           _drawDebug = false;
         } else if (_drawCubes && !_drawDebug) {
@@ -346,16 +382,16 @@ namespace Magnum {
           _drawCubes = true;
           _drawDebug = true;
         }
-
         /* What to shoot */
       } else if (event.key() == KeyEvent::Key::S) {
         _shootBox ^= true;
-      } else { return; }
-
+      } else {
+        cameraKeyPressEvent(event);
+      }
       event.setAccepted();
     }
 
-    void BulletExample::mousePressEvent(MouseEvent &event) {
+    void BulletExample::shootOnClick(MouseEvent &event) {
 
       /* Shoot an object on click */
       if (event.button() == MouseEvent::Button::Left) {
@@ -368,9 +404,9 @@ namespace Magnum {
         const Vector2  clickPoint = Vector2::yScale(-1.0f) *
                                     (Vector2{position} /
                                      Vector2{framebufferSize()} -
-                                     Vector2{0.5f}) * _camera->projectionSize();
+                                     Vector2{0.5f}) * 1.0f;
         const Vector3  direction  = (
-          _cameraObject->absoluteTransformation().rotationScaling() *
+          _arcballCamera->transformation().rotation().dot() *
           Vector3{clickPoint, -1.0f}).normalized();
 
         auto *object = new RigidBody{
@@ -379,8 +415,9 @@ namespace Magnum {
           _shootBox ? static_cast<btCollisionShape *>(&_bBoxShape)
                     : &_bSphereShape,
           _bWorld};
+
         object->translate(
-          _cameraObject->absoluteTransformation().translation());
+          _arcballCamera->transformation().translation());
         /* Has to be done explicitly after the translate() above, as Magnum ->
            Bullet updates are implicitly done only for kinematic bodies */
         object->syncPose();
@@ -398,6 +435,115 @@ namespace Magnum {
         event.setAccepted();
       }
     }
+
+
+    void BulletExample::drawTreeNodeBoundingBoxes() {
+//      arrayResize(_boxInstanceData, 0);
+//
+//      /* Always draw the root node */
+//      arrayAppend(_boxInstanceData, Containers::InPlaceInit,
+//                  _arcballCamera->viewMatrix()*
+//                  Matrix4::translation(_octree->center())*
+//                  Matrix4::scaling(Vector3{_octree->halfWidth()}), 0x00ffff_rgbf);
+//
+//      /* Draw the remaining non-empty nodes */
+//      if(_drawBoundingBoxes) {
+//        const auto& activeTreeNodeBlocks = _octree->activeTreeNodeBlocks();
+//        for(OctreeNodeBlock* const pNodeBlock : activeTreeNodeBlocks) {
+//          for(std::size_t childIdx = 0; childIdx < 8; ++childIdx) {
+//            const OctreeNode& pNode = pNodeBlock->_nodes[childIdx];
+//
+//            /* Non-empty node */
+//            if(!pNode.isLeaf() || pNode.pointCount() > 0) {
+//              const Matrix4 t = _arcballCamera->viewMatrix() *
+//                                Matrix4::translation(pNode.center())*
+//                                Matrix4::scaling(Vector3{pNode.halfWidth()});
+//              arrayAppend(_boxInstanceData, Containers::InPlaceInit, t,
+//                          0x197f99_rgbf);
+//            }
+//          }
+//        }
+//      }
+//
+//      _boxInstanceBuffer.setData(_boxInstanceData, GL::BufferUsage::DynamicDraw);
+//      _boxMesh.setInstanceCount(_boxInstanceData.size());
+//      _boxShader.setTransformationProjectionMatrix(_projectionMatrix)
+//        .draw(_boxMesh);
+    }
+
+    void BulletExample::viewportEvent(ViewportEvent& event) {
+      GL::defaultFramebuffer.setViewport({{}, event.framebufferSize()});
+      _arcballCamera->reshape(event.windowSize(), event.framebufferSize());
+
+      _projectionMatrix = Matrix4::perspectiveProjection(_arcballCamera->fov(),
+                                                         Vector2{event.framebufferSize()}.aspectRatio(), 0.01f, 100.0f);
+    }
+
+    void BulletExample::cameraKeyPressEvent(KeyEvent& event) {
+      if(event.key() == KeyEvent::Key::B) {
+        _drawBoundingBoxes ^= true;
+
+      } else if(event.key() == KeyEvent::Key::O) {
+        if((_collisionDetectionByOctree ^= true))
+          Debug{} << "Collision detection using octree";
+        else
+          Debug{} << "Collision detection using brute force";
+        /* Reset the profiler to avoid measurements of the two methods mixed
+           together */
+        if(_profiler.isEnabled()) _profiler.enable();
+
+      } else if(event.key() == KeyEvent::Key::P) {
+        if(_profiler.isEnabled()) _profiler.disable();
+        else _profiler.enable();
+
+      } else if(event.key() == KeyEvent::Key::R) {
+        _arcballCamera->reset();
+
+      } else if(event.key() == KeyEvent::Key::Space) {
+        _animation ^= true;
+
+      } else return;
+
+      event.setAccepted();
+      redraw();
+    }
+
+    void BulletExample::mousePressEvent(MouseEvent& event) {
+      /* Enable mouse capture so the mouse can drag outside of the window */
+      /** @todo replace once https://github.com/mosra/magnum/pull/419 is in */
+      SDL_CaptureMouse(SDL_TRUE);
+      _arcballCamera->initTransformation(event.position());
+      event.setAccepted();
+      redraw(); /* camera has changed, redraw! */
+    }
+
+    void BulletExample::mouseReleaseEvent(MouseEvent&) {
+      /* Disable mouse capture again */
+      /** @todo replace once https://github.com/mosra/magnum/pull/419 is in */
+      SDL_CaptureMouse(SDL_FALSE);
+    }
+
+    void BulletExample::mouseMoveEvent(MouseMoveEvent& event) {
+      if(!event.buttons()) return;
+
+      if(event.modifiers() & MouseMoveEvent::Modifier::Shift)
+        _arcballCamera->translate(event.position());
+      else _arcballCamera->rotate(event.position());
+
+      event.setAccepted();
+      redraw(); /* camera has changed, redraw! */
+    }
+
+    void BulletExample::mouseScrollEvent(MouseScrollEvent& event) {
+      const Float delta = event.offset().y();
+      if(Math::abs(delta) < 1.0e-2f) return;
+
+      _arcballCamera->zoom(delta);
+
+      event.setAccepted();
+      redraw(); /* camera has changed, redraw! */
+    }
+
 
   }
 }

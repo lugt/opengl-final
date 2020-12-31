@@ -41,6 +41,7 @@ find_package(Corrade REQUIRED Main)
 find_package(Magnum REQUIRED
     GL
     MeshTools
+    DebugTools
     Primitives
     SceneGraph
     Sdl2Application
@@ -51,13 +52,16 @@ find_package(Bullet REQUIRED Dynamics)
 
 set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
 
-add_executable(magnum-bullet WIN32 BulletExample.cpp)
+add_executable(magnum-bullet WIN32
+        BulletExample.cpp
+        ../arcball/ArcBall.cpp)
 target_link_libraries(magnum-bullet PRIVATE
     Corrade::Main
     Magnum::Application
     Magnum::GL
     Magnum::Magnum
     Magnum::MeshTools
+    Magnum::DebugTools
     Magnum::Primitives
     Magnum::SceneGraph
     Magnum::Shaders
