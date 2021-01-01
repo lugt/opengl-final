@@ -107,6 +107,13 @@ namespace Magnum {
       btCollisionDispatcher               _bDispatcher{&_bCollisionConfig};
       btSequentialImpulseConstraintSolver _bSolver;
 
+      Vector3                _lightRealPosition;
+      Vector3                _base_position;
+      std::vector<Matrix4 *> _stackedRoboPos;
+      std::vector<void *>    _stackedRoboTank;
+      int                    _currentTankLevel;
+      float                  _currentScale;
+
       /* boolean-valued options */
       bool _collisionDetectionByOctree = true;
       bool _isPausing                  = false;
@@ -136,6 +143,7 @@ namespace Magnum {
       btBoxShape    _bBoxShape{{0.5f, 0.5f, 0.5f}};
       btSphereShape _bSphereShape{0.25f};
       btBoxShape    _bGroundShape{{4.0f, 0.5f, 4.0f}};
+      btBoxShape    _roboTankShape{{1.0f, 0.5f, 0.5f}};
 
       bool _drawCubes{true}, _drawDebug{true}, _shootBox{true};
     };
@@ -189,6 +197,10 @@ namespace Magnum {
 
       btRigidBody &rigidBody() { return *_bRigidBody; }
 
+      bool isAvailable() {
+        return _bRigidBody != NULL;
+      };
+
       /* needed after changing the pose from Magnum side */
       void syncPose() {
         _bRigidBody->setWorldTransform(btTransform(transformationMatrix()));
@@ -231,13 +243,17 @@ namespace Magnum {
       }
 
 
+      _lightRealPosition = {0.0f, 10.0f, 0.0f};
+
       /* Create an instanced shader */
       _shader = Shaders::Phong{
         Shaders::Phong::Flag::VertexColor |
         Shaders::Phong::Flag::InstancedTransformation};
-      _shader.setAmbientColor(0x3f3f3f_rgbf)
+      _shader.setAmbientColor(0x101010_rgbf)
         .setSpecularColor(0xffffff_rgbf)
-        .setLightPositions({{10.0f, 15.0f, 5.0f}});
+        .setLightPosition(_arcballCamera->camera()
+                                 .cameraMatrix()
+                                 .transformPoint(_lightRealPosition));
 
       /* Box and sphere mesh, with an (initially empty) instance buffer */
       _box                  = MeshTools::compile(Primitives::cubeSolid());
@@ -270,6 +286,29 @@ namespace Magnum {
       new ColoredDrawable{*ground, _boxInstanceData, 0xffffff_rgbf,
                           Matrix4::scaling({4.0f, 0.5f, 4.0f}), _drawables};
 
+      _base_position = Vector3{5.0f, 1.0f, 5.0f};
+      _currentTankLevel = 0;
+      _currentScale = 1.0;
+      Vector3 parent_position = _base_position;
+      for (int i = 0; i < 5; i++) {
+        Matrix4 *cur_relative_position = new Matrix4{0.0f};
+        *cur_relative_position = Matrix4::translation({0.0, 1.0, 0.0});
+        Vector3 cur_position = (*cur_relative_position).transformVector(parent_position);
+        /* Create the 'robotank' */
+        RigidBody *robotank = new RigidBody{&_scene, 0.0f, &_roboTankShape, _bWorld};
+        robotank->rigidBody().setCollisionFlags( robotank->rigidBody().getCollisionFlags() |
+                                 btCollisionObject::CF_KINEMATIC_OBJECT);
+        robotank->rigidBody().setActivationState(DISABLE_DEACTIVATION);
+        new ColoredDrawable{*robotank, _boxInstanceData, 0xffffff_rgbf,
+                            Matrix4::scaling({1.0f, 0.5f, 0.5f}), _drawables};
+
+        robotank->translate(cur_position);
+        parent_position = cur_position;
+        robotank->syncPose();
+        _stackedRoboPos.push_back(cur_relative_position);
+        _stackedRoboTank.push_back(robotank);
+      }
+
       /* Create boxes with random colors */
       Deg      hue = 42.0_degf;
       for (Int i   = 0; i != 5; ++i) {
@@ -299,7 +338,8 @@ namespace Magnum {
       /* Housekeeping: remove any objects which are far away from the origin */
       for (Object3D *obj = _scene.children().first(); obj;) {
         Object3D *next = obj->nextSibling();
-        if (obj->transformation().translation().dot() > 100 * 100) {
+        if (obj->transformation().translation().dot() > 200 * 200) {
+          // obj->transformation().translation() = Vector3{5.0, 1.0, 5.0};
           delete obj;
         }
 
@@ -308,6 +348,9 @@ namespace Magnum {
 
       /* Step bullet simulation */
       _bWorld.stepSimulation(_timeline.previousFrameDuration(), 5);
+      _shader.setLightPosition(_arcballCamera->camera()
+                               .cameraMatrix()
+                               .transformPoint(_lightRealPosition));
 
 
       if (_drawCubes) {
@@ -337,6 +380,24 @@ namespace Magnum {
                                       GL::BufferUsage::DynamicDraw);
         _sphere.setInstanceCount(_sphereInstanceData.size());
         _shader.draw(_sphere);
+
+        Vector3 parent_position = _base_position;
+        CORRADE_ASSERT(_stackedRoboTank.size() == 5,
+                       "The list should contain 5 robot tank items.", );
+        for (int i = 0; i < 5; i++) {
+          Matrix4 *cur_relative_position = _stackedRoboPos.at(i);
+          Vector3 cur_position = (*cur_relative_position).transformPoint(parent_position);
+          /* Create the 'robotank' */
+          RigidBody *robotank = (RigidBody *) _stackedRoboTank.at(i);
+          CORRADE_ASSERT(robotank != NULL, "Should not be null", );
+          if (robotank && robotank->isAvailable()) {
+            robotank->resetTransformation();
+            robotank->translate(cur_position);
+            robotank->setDirty();
+            robotank->syncPose();
+          }
+          parent_position = cur_position;
+        }
       }
 
       /* Debug draw. If drawing on top of cubes, avoid flickering by setting
@@ -372,7 +433,7 @@ namespace Magnum {
     void BulletExample::keyPressEvent(KeyEvent &event) {
       /* Toggling draw modes */
       if (event.key() == KeyEvent::Key::D) {
-        if (_drawCubes && _drawDebug) {
+         if (_drawCubes && _drawDebug) {
           _drawDebug = false;
         } else if (_drawCubes && !_drawDebug) {
           _drawCubes = false;
@@ -498,10 +559,33 @@ namespace Magnum {
 
       } else if(event.key() == KeyEvent::Key::R) {
         _arcballCamera->reset();
-
+      } else if(event.key() == KeyEvent::Key::Zero|| event.key() == KeyEvent::Key::NumZero) {
+        _currentTankLevel = 0;
+        _currentScale = 1.0;
+      } else if(event.key() == KeyEvent::Key::One|| event.key() == KeyEvent::Key::NumOne) {
+        _currentTankLevel = 1;
+        _currentScale = 1.0;
+      } else if(event.key() == KeyEvent::Key::Two || event.key() == KeyEvent::Key::NumTwo) {
+        _currentTankLevel = 2;
+        _currentScale = 1.0;
       } else if(event.key() == KeyEvent::Key::Space) {
-        _animation ^= true;
-
+         _animation ^= true;
+        int i = _currentTankLevel;
+        Matrix4 *cur_relative_position = _stackedRoboPos.at(i);
+        if (event.modifiers() & MouseMoveEvent::Modifier::Alt) {
+          if (event.modifiers() & MouseMoveEvent::Modifier::Shift) {
+            _currentScale -= 0.2;
+          } else {
+            _currentScale += 0.2;
+          }
+        } else {
+          if (event.modifiers() & MouseMoveEvent::Modifier::Shift) {
+            _currentScale -= 0.2;
+          } else {
+            _currentScale += 0.2;
+          }
+        }
+        *cur_relative_position = Matrix4::translation({0.0, _currentScale, 0.0});
       } else return;
 
       event.setAccepted();
