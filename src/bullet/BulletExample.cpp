@@ -321,7 +321,7 @@ namespace Magnum {
         bool camChanged = _arcballCamera->update();
         _arcballCamera->draw(_drawables);
         _shader.setProjectionMatrix(_projectionMatrix)
-               .setTransformationMatrix(_arcballCamera->viewMatrix())
+               .setTransformationMatrix(_arcballCamera->viewMatrix() * _arcballCamera->transformationMatrix())
                .setNormalMatrix(_arcballCamera->viewMatrix().normalMatrix());
 
 
@@ -404,8 +404,9 @@ namespace Magnum {
                                     (Vector2{position} /
                                      Vector2{framebufferSize()} -
                                      Vector2{0.5f}) * 1.0f;
-        const Vector3  direction  = (
-          _arcballCamera->transformation().rotation().dot() *
+        // Then calculate the click point ?->yes
+        const Vector3  direction  =
+          (_arcballCamera->camera().object().absoluteTransformationMatrix().rotationScaling() *
           Vector3{clickPoint, -1.0f}).normalized();
 
         auto *object = new RigidBody{
