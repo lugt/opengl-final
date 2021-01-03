@@ -33,7 +33,15 @@
 #include <Corrade/Containers/GrowableArray.h>
 #include <Corrade/Containers/Optional.h>
 #include <Corrade/Containers/Pointer.h>
+#include <Corrade/Containers/Array.h>
+#include <Corrade/Containers/Optional.h>
+#include <Corrade/PluginManager/Manager.h>
+#include <Corrade/Utility/Arguments.h>
+#include <Corrade/Utility/DebugStl.h>
 #include <Magnum/Timeline.h>
+#include <Magnum/ImageView.h>
+#include <Magnum/Mesh.h>
+#include <Magnum/PixelFormat.h>
 #include <Magnum/BulletIntegration/Integration.h>
 #include <Magnum/BulletIntegration/MotionState.h>
 #include <Magnum/BulletIntegration/DebugDraw.h>
@@ -41,11 +49,12 @@
 #include <Magnum/GL/DefaultFramebuffer.h>
 #include <Magnum/GL/Mesh.h>
 #include <Magnum/GL/Renderer.h>
+#include <Magnum/GL/Texture.h>
+#include <Magnum/GL/TextureFormat.h>
 #include <Magnum/Math/Constants.h>
 #include <Magnum/Math/Color.h>
 #include <Magnum/MeshTools/Compile.h>
 #include <Magnum/MeshTools/Transform.h>
-#include <Magnum/Platform/Sdl2Application.h>
 #include <Magnum/Primitives/Cube.h>
 #include <Magnum/Primitives/UVSphere.h>
 #include <Magnum/Primitives/Icosphere.h>
@@ -55,7 +64,14 @@
 #include <Magnum/SceneGraph/Scene.h>
 #include <Magnum/Shaders/Phong.h>
 #include <Magnum/Shaders/Flat.h>
+#include <Magnum/Trade/Trade.h>
 #include <Magnum/Trade/MeshData.h>
+#include <Magnum/Trade/AbstractImporter.h>
+#include <Magnum/Trade/ImageData.h>
+#include <Magnum/Trade/MeshObjectData3D.h>
+#include <Magnum/Trade/PhongMaterialData.h>
+#include <Magnum/Trade/SceneData.h>
+#include <Magnum/Trade/TextureData.h>
 #include <Magnum/ImGuiIntegration/Context.hpp>
 
 // Smooth Arcball Camera
@@ -75,6 +91,7 @@ namespace Magnum {
 
     using namespace Math::Literals;
     using namespace Magnum::Examples;
+    using Trade::PhongMaterialData;
 
     typedef SceneGraph::Object<SceneGraph::MatrixTransformation3D> Object3D;
     typedef SceneGraph::Scene<SceneGraph::MatrixTransformation3D>  Scene3D;
@@ -85,129 +102,8 @@ namespace Magnum {
       Color3    color;
     };
 
-    class BulletExample : public Platform::Application {
-    public:
-      explicit BulletExample(const Arguments &arguments);
-
-    private:
-      // Display Parts & Event Handling
-      void drawEvent() override;
-      void keyPressEvent(KeyEvent &event) override;
-      void keyReleaseEvent(KeyEvent &event) override;
-      void mousePressEvent(MouseEvent &event) override;
-      void drawTreeNodeBoundingBoxes();
-      void mouseScrollEvent(MouseScrollEvent& event) override;
-      void mouseMoveEvent(MouseMoveEvent& event) override;
-      void mouseReleaseEvent(MouseEvent&) override;
-      void viewportEvent(ViewportEvent& event) override;
-
-      // Functional Parts
-      void shootOnClick(MouseEvent &event);
-
-      GL::Mesh                        _box{NoCreate}, _sphere{NoCreate};
-      GL::Buffer                      _boxInstanceBuffer{
-        NoCreate},                    _sphereInstanceBuffer{NoCreate};
-      Shaders::Phong                  _shader{NoCreate};
-      BulletIntegration::DebugDraw    _debugDraw{NoCreate};
-      Containers::Array<InstanceData> _boxInstanceData, _sphereInstanceData;
-
-      btDbvtBroadphase                    _bBroadphase;
-      btDefaultCollisionConfiguration     _bCollisionConfig;
-      btCollisionDispatcher               _bDispatcher{&_bCollisionConfig};
-      btSequentialImpulseConstraintSolver _bSolver;
-
-      Vector3                _lightRealPosition;
-      Vector3                _basePosition;
-      std::vector<Matrix4 *> _stackedRoboPos;
-      std::vector<void *>    _stackedRoboTank;
-      int                    _currentTankLevel;
-      float                  _currentScale;
-
-      /* boolean-valued options */
-      bool _collisionDetectionByOctree = true;
-      bool _isPausing                  = false;
-      bool _drawBoundingBoxes          = false;
-      bool _animation                  = false;
-      bool _directionsPressed[5]       = {false};
-
-
-      ImGuiIntegration::Context _imgui{NoCreate};
-
-      bool _showDemoWindow = true;
-      bool _showAnotherWindow = false;
-      Color4 _clearColor = 0x72909aff_rgbaf;
-      Float _floatValue = 0.0f;
-      Float _basePositionX = 5.0f;
-      Float _basePositionY = 0.0f;
-      Float _basePositionZ = 5.0f;
-      Float _basePositionVerticalSpeed = 0.0f;
-
-      /* Octree and boundary boxes */
-      Containers::Pointer<int> _octree;
-
-      /* Profiling */
-      DebugTools::GLFrameProfiler _profiler{
-        DebugTools::GLFrameProfiler::Value::FrameTime |
-        DebugTools::GLFrameProfiler::Value::CpuDuration, 180};
-
-      /* The world has to live longer than the scene because RigidBody
-         instances have to remove themselves from it on destruction */
-      btDiscreteDynamicsWorld _bWorld{&_bDispatcher, &_bBroadphase, &_bSolver,
-                                      &_bCollisionConfig};
-
-      Scene3D                             _scene;
-      Containers::Optional<ArcBallCamera> _arcballCamera;
-      Matrix4                             _projectionMatrix;
-      SceneGraph::DrawableGroup3D         _drawables;
-      Timeline                            _timeline;
-
-      btBoxShape    _bBoxShape{{0.5f, 0.5f, 0.5f}};
-      btSphereShape _bSphereShape{0.25f};
-      btBoxShape    _bGroundShape{{20.0f, 0.5f, 20.0f}};
-      btBoxShape    _roboTankShape{{1.0f, 0.5f, 0.5f}};
-
-      bool _drawCubes{true}, _drawDebug{true}, _shootBox{true};
-
-      void drawImgui();
-
-      void initializeGui();
-
-      void drawStackDemo();
-
-      void shootItem(Vector2i startLocation, bool isBox);
-
-      void initializeRoboTank();
-
-      void playerControlStart(KeyEvent &event);
-
-      void playerControlEnd(KeyEvent &event);
-
-      void playerMovement(Float duration);
-    };
-
-    class ColoredDrawable : public SceneGraph::Drawable3D {
-    public:
-      explicit ColoredDrawable(Object3D &object,
-                               Containers::Array<InstanceData> &instanceData,
-                               const Color3 &color,
-                               const Matrix4 &primitiveTransformation,
-                               SceneGraph::DrawableGroup3D &drawables)
-        : SceneGraph::Drawable3D{object, &drawables},
-          _instanceData(instanceData), _color{color},
-          _primitiveTransformation{primitiveTransformation} {}
-
-    private:
-      void
-      draw(const Matrix4 &transformation, SceneGraph::Camera3D &) override {
-        const Matrix4 t = transformation * _primitiveTransformation;
-        arrayAppend(_instanceData, Containers::InPlaceInit,
-                    t, t.normalMatrix(), _color);
-      }
-
-      Containers::Array<InstanceData> &_instanceData;
-      Color3                          _color;
-      Matrix4                         _primitiveTransformation;
-    };
+    /* Basic Camera & Shaders */
+    Vector3                  _lightRealPosition;
 
     class RigidBody : public Object3D {
     public:
@@ -248,50 +144,197 @@ namespace Magnum {
       Containers::Pointer<btRigidBody> _bRigidBody;
     };
 
+    class BulletExample : public Platform::Application {
+    public:
+      explicit BulletExample(const Arguments &arguments);
+
+    private:
+      GL::Mesh                        _box{NoCreate}, _sphere{NoCreate};
+      GL::Buffer                      _boxInstanceBuffer{
+        NoCreate},                    _sphereInstanceBuffer{NoCreate};
+      Shaders::Phong                  _shader{NoCreate};
+      BulletIntegration::DebugDraw    _debugDraw{NoCreate};
+      Containers::Array<InstanceData> _boxInstanceData, _sphereInstanceData;
+
+      btDbvtBroadphase                    _bBroadphase;
+      btDefaultCollisionConfiguration     _bCollisionConfig;
+      btCollisionDispatcher               _bDispatcher{&_bCollisionConfig};
+      btSequentialImpulseConstraintSolver _bSolver;
+
+      /* boolean-valued options */
+      bool _collisionDetectionByOctree = true;
+      bool _isPausing                  = false;
+      bool _drawBoundingBoxes          = false;
+      bool _animation                  = false;
+      bool _directionsPressed[5]       = {false};
+
+      /* Viewer related */
+      Shaders::Phong _coloredShader{NoCreate}, _texturedShader{NoCreate};
+      Containers::Array<Containers::Optional<GL::Mesh>>      _meshes;
+      Containers::Array<Containers::Optional<GL::Texture2D>> _textures;
+      Object3D _manipulator;
+
+      /* Imgui */
+      ImGuiIntegration::Context _imgui{NoCreate};
+      bool _showDemoWindow = true;
+      bool _showAnotherWindow = false;
+      Color4 _clearColor = 0x72909aff_rgbaf;
+      Float _floatValue = 0.0f;
+
+      /* Robo tank related */
+      Vector3                  _basePosition;
+      std::vector<Matrix4 *>   _stackedRoboPos;
+      std::vector<RigidBody *> _stackedRoboTank;
+      int                      _currentTankLevel;
+      float                    _currentScale;
+      Float _basePositionX = 5.0f;
+      Float _basePositionY = 0.0f;
+      Float _basePositionZ = 5.0f;
+      Float _basePositionVerticalSpeed = 0.0f;
+
+      /* Octree and boundary boxes */
+      Containers::Pointer<int> _octree;
+
+      /* Profiling */
+      DebugTools::GLFrameProfiler _profiler{
+        DebugTools::GLFrameProfiler::Value::FrameTime |
+        DebugTools::GLFrameProfiler::Value::CpuDuration, 180};
+
+      /* The world has to live longer than the scene because RigidBody
+         instances have to remove themselves from it on destruction */
+      btDiscreteDynamicsWorld _bWorld{&_bDispatcher, &_bBroadphase, &_bSolver,
+                                      &_bCollisionConfig};
+
+      Scene3D                             _scene;
+      Containers::Optional<ArcBallCamera> _arcballCamera;
+      Matrix4                             _projectionMatrix;
+      SceneGraph::DrawableGroup3D         _drawables;
+      Timeline                            _timeline;
+
+      btBoxShape    _bBoxShape{{0.5f, 0.5f, 0.5f}};
+      btSphereShape _bSphereShape{0.25f};
+      btBoxShape    _bGroundShape{{20.0f, 0.5f, 20.0f}};
+      btBoxShape    _roboTankShape{{1.0f, 0.5f, 0.5f}};
+
+      bool _drawCubes{true}, _drawDebug{true}, _shootBox{true};
+
+      // Display Parts & Event Handling
+      void drawEvent() override;
+      void keyPressEvent(KeyEvent &event) override;
+      void keyReleaseEvent(KeyEvent &event) override;
+      void mousePressEvent(MouseEvent &event) override;
+      void drawTreeNodeBoundingBoxes();
+      void mouseScrollEvent(MouseScrollEvent& event) override;
+      void mouseMoveEvent(MouseMoveEvent& event) override;
+      void mouseReleaseEvent(MouseEvent&) override;
+      void viewportEvent(ViewportEvent& event) override;
+
+      /* IMGUI related*/
+      void drawImgui();
+      void initializeGui();
+
+      // Robo tank related.
+      void calculateStackDemoPositions();
+      void initializeRoboTank();
+      void playerControlStart(KeyEvent &event);
+      void playerControlEnd(KeyEvent &event);
+      void playerMovement(Float duration);
+      RigidBody *getRootRigidBody();
+
+      /* Bullet related */
+      void shootItem(Vector2i startLocation, bool isBox);
+      void shootOnClick(MouseEvent &event);
+
+      /* Viewer related */
+      void addObject(Trade::AbstractImporter &importer,
+                     Containers::ArrayView
+                       <const Containers::Optional<PhongMaterialData>> materials,
+                     Object3D &parent, UnsignedInt i);
+      Vector3 positionOnSphere(const Vector2i& position) const;
+      void prepareShaders();
+      void setupCamera();
+      void importFile(const Arguments &arguments);
+
+      void configureWindow();
+    };
+
+    class ColoredDrawable : public SceneGraph::Drawable3D {
+    public:
+      explicit ColoredDrawable(Object3D &object,
+                               Containers::Array<InstanceData> &instanceData,
+                               const Color3 &color,
+                               const Matrix4 &primitiveTransformation,
+                               SceneGraph::DrawableGroup3D &drawables)
+        : SceneGraph::Drawable3D{object, &drawables},
+          _instanceData(instanceData), _color{color},
+          _primitiveTransformation{primitiveTransformation} {}
+
+    private:
+      void
+      draw(const Matrix4 &transformation, SceneGraph::Camera3D &) override {
+        const Matrix4 t = transformation * _primitiveTransformation;
+        arrayAppend(_instanceData, Containers::InPlaceInit,
+                    t, t.normalMatrix(), _color);
+      }
+      Containers::Array<InstanceData> &_instanceData;
+      Color3                          _color;
+      Matrix4                         _primitiveTransformation;
+    };
+
+    class NewColoredDrawable: public SceneGraph::Drawable3D {
+    public:
+      explicit NewColoredDrawable(Object3D &object, Shaders::Phong &shader,
+                                  GL::Mesh &mesh, const Color4 &color,
+                                  SceneGraph::DrawableGroup3D &group)
+        : SceneGraph::Drawable3D{object, &group}, _shader(shader), _mesh(mesh),
+          _color{color} {}
+
+    private:
+      void draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) override;
+
+      Shaders::Phong& _shader;
+      GL::Mesh& _mesh;
+      Color4 _color;
+    };
+
+    class TexturedDrawable: public SceneGraph::Drawable3D {
+    public:
+      explicit TexturedDrawable(Object3D& object, Shaders::Phong& shader, GL::Mesh& mesh, GL::Texture2D& texture, SceneGraph::DrawableGroup3D& group): SceneGraph::Drawable3D{object, &group}, _shader(shader), _mesh(mesh), _texture(texture) {}
+    private:
+      void draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) override;
+      Shaders::Phong& _shader;
+      GL::Mesh& _mesh;
+      GL::Texture2D& _texture;
+    };
+
+    void NewColoredDrawable::draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) {
+      _shader
+        .setDiffuseColor(_color)
+        .setLightPosition(camera.cameraMatrix().transformPoint(_lightRealPosition))
+        .setTransformationMatrix(transformationMatrix)
+        .setNormalMatrix(transformationMatrix.normalMatrix())
+        .setProjectionMatrix(camera.projectionMatrix())
+        .draw(_mesh);
+    }
+
+    void TexturedDrawable::draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) {
+      _shader
+        .setLightPosition(camera.cameraMatrix().transformPoint(_lightRealPosition))
+        .setTransformationMatrix(transformationMatrix)
+        .setNormalMatrix(transformationMatrix.normalMatrix())
+        .setProjectionMatrix(camera.projectionMatrix())
+        .bindDiffuseTexture(_texture)
+        .draw(_mesh);
+    }
+
     BulletExample::BulletExample(const Arguments &arguments)
       : Platform::Application(arguments, NoCreate) {
       /* Try 8x MSAA, fall back to zero samples if not possible. Enable only 2x
          MSAA if we have enough DPI. */
-      {
-        const Vector2 dpiScaling = this->dpiScaling({});
-        Configuration conf;
-        conf.setTitle("Guanting Lu 2017152003 Example")
-          .setSize(conf.size(), dpiScaling);
-        conf.setWindowFlags(Configuration::WindowFlag::Resizable);
-        GLConfiguration glConf;
-        // Work with DPI-awareness.
-        glConf.setSampleCount(dpiScaling.max() < 2.0f ? 8 : 2);
-        if (!tryCreate(conf, glConf)) {
-          create(conf, glConf.setSampleCount(0));
-        }
-      }
-
-      /* Setup camera */
-      {
-        const Vector3 eye = Vector3::zAxis(5.0f);
-        const Vector3 viewCenter;
-        const Vector3 up = Vector3::yAxis();
-        const Deg fov = 45.0_degf;
-        _arcballCamera.emplace(_scene, eye, viewCenter, up, fov,
-                               windowSize(), framebufferSize());
-        _arcballCamera->setLagging(0.85f);
-
-        _projectionMatrix = Matrix4::perspectiveProjection(fov,
-                                                           Vector2{framebufferSize()}.aspectRatio(), 0.01f, 100.0f);
-      }
-
-
-      _lightRealPosition = {0.0f, 10.0f, 0.0f};
-
-      /* Create an instanced shader */
-      _shader = Shaders::Phong{
-        Shaders::Phong::Flag::VertexColor |
-        Shaders::Phong::Flag::InstancedTransformation};
-      _shader.setAmbientColor(0x101010_rgbf)
-        .setSpecularColor(0xffffff_rgbf)
-        .setLightPosition(_arcballCamera->camera()
-                                 .cameraMatrix()
-                                 .transformPoint(_lightRealPosition));
+      configureWindow();
+      importFile(arguments);
+      setupCamera();
+      prepareShaders();
 
       /* Box and sphere mesh, with an (initially empty) instance buffer */
       _box                  = MeshTools::compile(Primitives::cubeSolid());
@@ -331,13 +374,13 @@ namespace Magnum {
       for (Int i   = 0; i != 5; ++i) {
         for (Int j = 0; j != 5; ++j) {
           for (Int k = 0; k != 5; ++k) {
-            auto *o = new RigidBody{&_scene, 1.0f, &_bBoxShape, _bWorld};
-            o->translate({i - 2.0f, j + 4.0f, k - 2.0f});
-            o->syncPose();
-            new ColoredDrawable{*o, _boxInstanceData,
-                                Color3::fromHsv(
-                                  {hue += 137.5_degf, 0.75f, 0.9f}),
-                                Matrix4::scaling(Vector3{0.5f}), _drawables};
+//            auto *o = new RigidBody{&_scene, 1.0f, &_bBoxShape, _bWorld};
+//            o->translate({i - 2.0f, j + 4.0f, k - 2.0f});
+//            o->syncPose();
+//            new ColoredDrawable{*o, _boxInstanceData,
+//                                Color3::fromHsv(
+//                                  {hue += 137.5_degf, 0.75f, 0.9f}),
+//                                Matrix4::scaling(Vector3{0.5f}), _drawables};
           }
         }
       }
@@ -372,22 +415,22 @@ namespace Magnum {
                                .transformPoint(_lightRealPosition));
 
       playerMovement(_timeline.previousFrameDuration());
+      calculateStackDemoPositions();
+
+      /* Populate instance data with transformations and colors */
+      arrayResize(_boxInstanceData, 0);
+      arrayResize(_sphereInstanceData, 0);
+      bool camChanged = _arcballCamera->update();
+      _arcballCamera->draw(_drawables);
+      _shader.setProjectionMatrix(_projectionMatrix)
+        .setTransformationMatrix(_arcballCamera->viewMatrix() * _arcballCamera->transformationMatrix())
+        .setNormalMatrix(_arcballCamera->viewMatrix().normalMatrix());
 
 
       if (_drawCubes) {
-        /* Populate instance data with transformations and colors */
-        arrayResize(_boxInstanceData, 0);
-        arrayResize(_sphereInstanceData, 0);
-
         /* Call arcball update in every frame. This will do nothing if the camera
          has not been changed. Otherwise, camera transformation will be
          propagated into the camera objects. */
-        bool camChanged = _arcballCamera->update();
-        _arcballCamera->draw(_drawables);
-        _shader.setProjectionMatrix(_projectionMatrix)
-               .setTransformationMatrix(_arcballCamera->viewMatrix() * _arcballCamera->transformationMatrix())
-               .setNormalMatrix(_arcballCamera->viewMatrix().normalMatrix());
-
 
         /* Upload instance data to the GPU (orphaning the previous buffer
            contents) and draw all cubes in one call, and all spheres (if any)
@@ -401,8 +444,6 @@ namespace Magnum {
                                       GL::BufferUsage::DynamicDraw);
         _sphere.setInstanceCount(_sphereInstanceData.size());
         _shader.draw(_sphere);
-
-        drawStackDemo();
 
       }
 
@@ -702,10 +743,11 @@ namespace Magnum {
       playerControlEnd(event);
     }
 
-    void BulletExample::drawStackDemo() {
-
+    void BulletExample::calculateStackDemoPositions() {
       RigidBody *rootRigidBody = (RigidBody*) _stackedRoboTank[0];
+      _basePositionX = rootRigidBody->transformation().translation().x();
       _basePositionY = rootRigidBody->transformation().translation().y();
+      _basePositionZ = rootRigidBody->transformation().translation().z();
 
       _basePosition     = Vector3{_basePositionX, _basePositionY, _basePositionZ};
       Vector3 parent_position = _basePosition;
@@ -805,6 +847,9 @@ namespace Magnum {
         _directionsPressed[3] = true;
       } else if (event.key() == KeyEvent::Key::Space) {
         _directionsPressed[4] = true;
+      } else if (event.key() == KeyEvent::Key::K) {
+        RigidBody *rootRigidBody = getRootRigidBody();
+        rootRigidBody->rigidBody().setLinearVelocity(btVector3{0.0f, 0.0f, .0f});
       }
     }
     void BulletExample::playerControlEnd(KeyEvent &event) {
@@ -820,27 +865,249 @@ namespace Magnum {
         _directionsPressed[4] = false;
       }
     }
-    void BulletExample::playerMovement(Float duration) {
-      Float step = 0.1;
+    void BulletExample::playerMovement(Float) {
+      Float step = 10.0f;
+      Float yspeed = 0.0f;
+      Float zspeed = 0.0f;
+      Float xspeed = 0.0f;
       if(_directionsPressed[0]) {
-        _basePositionZ -= step;
+        zspeed = -step;
       }
       if(_directionsPressed[2]) {
-        _basePositionZ += step;
+        zspeed = step;
       }
       if(_directionsPressed[1]) {
-        _basePositionX -= step;
+        xspeed = -step;
       }
       if(_directionsPressed[3]) {
-        _basePositionX += step;
+        xspeed = step;
       }
       if (_directionsPressed[4]) {
         // Jump now.
-        _basePositionVerticalSpeed = 0.1;
-        RigidBody *rigidBody = (RigidBody*) _stackedRoboTank[0];
-        rigidBody->rigidBody().setLinearVelocity(btVector3{0.0f, 0.1f, 0.0f});
+        yspeed = 15.0f;
       } else {
-        _basePositionVerticalSpeed = 0.0;
+        yspeed = 0.0;
+      }
+      if (_directionsPressed[0] || _directionsPressed[1]
+       || _directionsPressed[2] || _directionsPressed[3] || _directionsPressed[4]) {
+        RigidBody *rigidBody = (RigidBody*) _stackedRoboTank[0];
+        rigidBody->rigidBody().setLinearVelocity(btVector3{xspeed, yspeed, zspeed});
+      }
+    }
+
+    RigidBody *BulletExample::getRootRigidBody() {
+      return (RigidBody*) _stackedRoboTank[0];
+    }
+
+    void BulletExample::addObject(Trade::AbstractImporter &importer,
+                                  Containers::ArrayView<const
+                                  Containers::Optional<Trade::PhongMaterialData>
+                                  > materials,
+                                  Object3D &parent, UnsignedInt i) {
+      Debug{} << "Importing object" << i << importer.object3DName(i);
+      Containers::Pointer<Trade::ObjectData3D> objectData = importer.object3D(i);
+      if(!objectData) {
+        Error{} << "Cannot import object, skipping";
+        return;
+      }
+
+      /* Add the object to the scene and set its transformation */
+      auto* object = new Object3D{&parent};
+      object->setTransformation(objectData->transformation());
+
+      /* Add a drawable if the object has a mesh and the mesh is loaded */
+      if(objectData->instanceType() == Trade::ObjectInstanceType3D::Mesh && objectData->instance() != -1 && _meshes[objectData->instance()]) {
+        const Int materialId = static_cast<Trade::MeshObjectData3D*>(objectData.get())->material();
+
+        /* Material not available / not loaded, use a default material */
+        if(materialId == -1 || !materials[materialId]) {
+          new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], 0xffffff_rgbf, _drawables};
+
+          /* Textured material. If the texture failed to load, again just use a
+             default colored material. */
+        } else if(materials[materialId]->flags()) {
+          Containers::Optional<GL::Texture2D>& texture = _textures[materials[materialId]->diffuseTexture()];
+          if(texture)
+            new TexturedDrawable{*object, _texturedShader, *_meshes[objectData->instance()], *texture, _drawables};
+          else
+            new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], 0xffffff_rgbf, _drawables};
+
+          /* Color-only material */
+        } else {
+          new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], materials[materialId]->diffuseColor(), _drawables};
+        }
+      }
+
+      /* Recursively add children */
+      for(std::size_t id: objectData->children())
+        addObject(importer, materials, *object, id);
+    }
+
+    void BulletExample::prepareShaders() {
+      _lightRealPosition = {0.0f, 10.0f, 0.0f};
+
+      /* Create an instanced shader */
+      _shader = Shaders::Phong{
+        Shaders::Phong::Flag::VertexColor |
+        Shaders::Phong::Flag::InstancedTransformation};
+      _shader.setAmbientColor(0x101010_rgbf)
+        .setSpecularColor(0xffffff_rgbf)
+        .setLightPosition(_arcballCamera->camera()
+                            .cameraMatrix()
+                            .transformPoint(_lightRealPosition));
+      _coloredShader = Shaders::Phong{
+        Shaders::Phong::Flag::VertexColor |
+        Shaders::Phong::Flag::InstancedTransformation};
+      _coloredShader
+        .setAmbientColor(0x111111_rgbf)
+        .setSpecularColor(0xffffff_rgbf)
+        .setShininess(80.0f);
+
+      _texturedShader = Shaders::Phong{
+        Shaders::Phong::Flag::DiffuseTexture |
+        Shaders::Phong::Flag::InstancedTransformation};
+      _texturedShader
+        .setAmbientColor(0x111111_rgbf)
+        .setSpecularColor(0x111111_rgbf)
+        .setShininess(80.0f);
+    }
+    void BulletExample::setupCamera() {
+      /* Setup camera */
+      {
+        const Vector3 eye = Vector3::zAxis(5.0f);
+        const Vector3 viewCenter;
+        const Vector3 up = Vector3::yAxis();
+        const Deg fov = 45.0_degf;
+        _arcballCamera.emplace(_scene, eye, viewCenter, up, fov,
+                               windowSize(), framebufferSize());
+        _arcballCamera->setLagging(0.85f);
+
+        _projectionMatrix = Matrix4::perspectiveProjection(fov,
+                                                           Vector2{framebufferSize()}.aspectRatio(), 0.01f, 100.0f);
+      }
+    }
+
+    void BulletExample::importFile(const Arguments &arguments) {
+      Utility::Arguments args;
+      args.addArgument("file").setHelp("file", "file to load")
+        .addOption("importer", "AnySceneImporter").setHelp("importer", "importer plugin to use")
+        .addSkippedPrefix("magnum", "engine-specific options")
+        .setGlobalHelp("Displays a 3D scene file provided on command line.")
+        .parse(arguments.argc, arguments.argv);
+
+      /* Base object, parent of all (for easy manipulation) */
+      _manipulator.setParent(&_scene);
+
+      /* Load a scene importer plugin */
+      PluginManager::Manager<Trade::AbstractImporter> manager;
+      Containers::Pointer<Trade::AbstractImporter> importer = manager.loadAndInstantiate(args.value("importer"));
+      if(!importer) std::exit(1);
+
+      Debug{} << "Opening file" << args.value("file");
+
+      /* Load file */
+      if(!importer->openFile(args.value("file")))
+        std::exit(4);
+
+      /* Load all textures. Textures that fail to load will be NullOpt. */
+      _textures = Containers::Array<Containers::Optional<GL::Texture2D>>{importer->textureCount()};
+      for(UnsignedInt i = 0; i != importer->textureCount(); ++i) {
+        Debug{} << "Importing texture" << i << importer->textureName(i);
+
+        Containers::Optional<Trade::TextureData> textureData = importer->texture(i);
+        if(!textureData || textureData->type() != Trade::TextureData::Type::Texture2D) {
+          Warning{} << "Cannot load texture properties, skipping";
+          continue;
+        }
+
+        Debug{} << "Importing image" << textureData->image() << importer->image2DName(textureData->image());
+
+        Containers::Optional<Trade::ImageData2D> imageData = importer->image2D(textureData->image());
+        GL::TextureFormat format;
+        if(imageData && imageData->format() == PixelFormat::RGB8Unorm)
+          format = GL::TextureFormat::RGB8;
+        else if(imageData && imageData->format() == PixelFormat::RGBA8Unorm)
+          format = GL::TextureFormat::RGBA8;
+        else {
+          Warning{} << "Cannot load texture image, skipping";
+          continue;
+        }
+
+        /* Configure the texture */
+        GL::Texture2D texture;
+        texture
+          .setMagnificationFilter(textureData->magnificationFilter())
+          .setMinificationFilter(textureData->minificationFilter(), textureData->mipmapFilter())
+          .setWrapping(textureData->wrapping().xy())
+          .setStorage(Math::log2(imageData->size().max()) + 1, format, imageData->size())
+          .setSubImage(0, {}, *imageData)
+          .generateMipmap();
+
+        _textures[i] = std::move(texture);
+      }
+
+      /* Load all materials. Materials that fail to load will be NullOpt. The
+         data will be stored directly in objects later, so save them only
+         temporarily. */
+      Containers::Array<Containers::Optional<Trade::PhongMaterialData>> materials{importer->materialCount()};
+      for(UnsignedInt i = 0; i != importer->materialCount(); ++i) {
+        Debug{} << "Importing material" << i << importer->materialName(i);
+
+        Containers::Pointer<Trade::AbstractMaterialData> materialData = importer->material(i);
+        if(!materialData || !(materialData->type() == Trade::MaterialType::Phong)) {
+          Warning{} << "Cannot load material, skipping";
+          continue;
+        }
+
+        materials[i] = std::move(static_cast<Trade::PhongMaterialData&>(*materialData));
+      }
+
+      /* Load all meshes. Meshes that fail to load will be NullOpt. */
+      _meshes = Containers::Array<Containers::Optional<GL::Mesh>>{importer->meshCount()};
+      for(UnsignedInt i = 0; i != importer->meshCount(); ++i) {
+        Debug{} << "Importing mesh" << i << importer->meshName(i);
+
+        Containers::Optional<Trade::MeshData> meshData = importer->mesh(i);
+        if(!meshData || !meshData->hasAttribute(Trade::MeshAttribute::Normal) || meshData->primitive() != MeshPrimitive::Triangles) {
+          Warning{} << "Cannot load the mesh, skipping";
+          continue;
+        }
+
+        /* Compile the mesh */
+        _meshes[i] = MeshTools::compile(*meshData);
+      }
+
+      /* Load the scene */
+      if(importer->defaultScene() != -1) {
+        Debug{} << "Adding default scene" << importer->sceneName(importer->defaultScene());
+
+        Containers::Optional<Trade::SceneData> sceneData = importer->scene(importer->defaultScene());
+        if(!sceneData) {
+          Error{} << "Cannot load scene, exiting";
+          return;
+        }
+
+        /* Recursively add all children */
+        for(UnsignedInt objectId: sceneData->children3D())
+          addObject(*importer, materials, _manipulator, objectId);
+
+        /* The format has no scene support, display just the first loaded mesh with
+           a default material and be done with it */
+      } else if(!_meshes.empty() && _meshes[0])
+        new NewColoredDrawable{_manipulator, _coloredShader, *_meshes[0], 0xffffff_rgbf, _drawables};
+    }
+
+    void BulletExample::configureWindow() {
+      const Vector2 dpiScaling = this->dpiScaling({});
+      Configuration conf;
+      conf.setTitle("Guanting Lu 2017152003 Final Project")
+        .setSize(conf.size(), dpiScaling);
+      conf.setWindowFlags(Configuration::WindowFlag::Resizable);
+      GLConfiguration glConf;
+      // Work with DPI-awareness.
+      glConf.setSampleCount(dpiScaling.max() < 2.0f ? 8 : 2);
+      if (!tryCreate(conf, glConf)) {
+        create(conf, glConf.setSampleCount(0));
       }
     }
   }

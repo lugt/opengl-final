@@ -45,9 +45,12 @@ find_package(Magnum REQUIRED
     Primitives
     SceneGraph
     Sdl2Application
+    AnyImageImporter
+    AnySceneImporter
     Shaders
     Trade)
 find_package(MagnumIntegration REQUIRED Bullet ImGui)
+find_package(MagnumPlugins REQUIRED AssimpImporter)
 find_package(Bullet REQUIRED Dynamics)
 
 if(CORRADE_TARGET_ANDROID)
@@ -74,8 +77,11 @@ target_link_libraries(magnum-bullet PRIVATE
     Magnum::SceneGraph
     Magnum::Shaders
     Magnum::Trade
+    Magnum::AnyImageImporter
+    Magnum::AnySceneImporter
     MagnumIntegration::Bullet
     MagnumIntegration::ImGui
+    MagnumPlugins::AssimpImporter
     Bullet::Collision
     Bullet::Dynamics)
 

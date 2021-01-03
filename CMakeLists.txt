@@ -97,6 +97,33 @@ if(NOT DEFINED CMAKE_RUNTIME_OUTPUT_DIRECTORY AND NOT DEFINED CMAKE_LIBRARY_OUTP
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/lib CACHE PATH "" FORCE)
 endif()
 
-
+set(BUILD_PLUGINS_STATIC ON CACHE BOOL "" FORCE)
+set(WITH_STBIMAGEIMPORTER ON CACHE BOOL "" FORCE) # enable what you need
+set(WITH_STBIMAGECONVERTER ON CACHE BOOL "" FORCE) # enable what you need
+set(WITH_STLIMPORTER ON CACHE BOOL "" FORCE) # enable what you need
+set(WITH_ASSIMPIMPORTER ON CACHE BOOL "" FORCE) # enable what you need
+set(WITH_ANYAUDIOIMPORTER ON CACHE BOOL "" FORCE)
+set(WITH_ANYIMAGEIMPORTER ON CACHE BOOL "" FORCE)
+set(WITH_ANYSCENECONVERTER ON CACHE BOOL "" FORCE)
+set(WITH_ANYSCENEIMPORTER ON CACHE BOOL "" FORCE)
+set(WITH_OBJIMPORTER ON CACHE BOOL "" FORCE)
+set(WITH_MAGNUMFONT ON CACHE BOOL "" FORCE)
+set(WITH_TGAIMPORTER ON CACHE BOOL "" FORCE)
+set(WITH_TGAIMAGECONVERTER ON CACHE BOOL "" FORCE)
+# Disable Assimp tests, tools and exporter functionality
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
+# If you won't be accessing Assimp outside of the plugin, build it as static to
+# have the plugin binary self-contained
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+# The following is important to avoid Assimp appending `d` to all your
+# binaries. You need Assimp >= 5.0.0 for this to work, also note that after
+# 5.0.1 this option is prefixed with ASSIMP_, so better set both variants.
+set(INJECT_DEBUG_POSTFIX OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INJECT_DEBUG_POSTFIX OFF CACHE BOOL "" FORCE)
+add_subdirectory(magnum)
 add_subdirectory(magnum-integration)
+add_subdirectory(magnum-plugins)
+
 add_subdirectory(src)
