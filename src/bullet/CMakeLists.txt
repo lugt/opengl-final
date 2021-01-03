@@ -47,8 +47,16 @@ find_package(Magnum REQUIRED
     Sdl2Application
     Shaders
     Trade)
-find_package(MagnumIntegration REQUIRED Bullet)
+find_package(MagnumIntegration REQUIRED Bullet ImGui)
 find_package(Bullet REQUIRED Dynamics)
+
+if(CORRADE_TARGET_ANDROID)
+    find_package(Magnum REQUIRED AndroidApplication)
+elseif(CORRADE_TARGET_EMSCRIPTEN)
+    find_package(Magnum REQUIRED EmscriptenApplication)
+else()
+    find_package(Magnum REQUIRED Sdl2Application)
+endif()
 
 set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
 
@@ -67,6 +75,7 @@ target_link_libraries(magnum-bullet PRIVATE
     Magnum::Shaders
     Magnum::Trade
     MagnumIntegration::Bullet
+    MagnumIntegration::ImGui
     Bullet::Collision
     Bullet::Dynamics)
 

@@ -56,10 +56,19 @@
 #include <Magnum/Shaders/Phong.h>
 #include <Magnum/Shaders/Flat.h>
 #include <Magnum/Trade/MeshData.h>
+#include <Magnum/ImGuiIntegration/Context.hpp>
 
 // Smooth Arcball Camera
 #include "../arcball/ArcBall.h"
 #include "../arcball/ArcBallCamera.h"
+
+#ifdef CORRADE_TARGET_ANDROID
+#include <Magnum/Platform/AndroidApplication.h>
+#elif defined(CORRADE_TARGET_EMSCRIPTEN)
+#include <Magnum/Platform/EmscriptenApplication.h>
+#else
+#include <Magnum/Platform/Sdl2Application.h>
+#endif
 
 namespace Magnum {
   namespace LabFinal {
@@ -84,8 +93,8 @@ namespace Magnum {
       // Display Parts & Event Handling
       void drawEvent() override;
       void keyPressEvent(KeyEvent &event) override;
+      void keyReleaseEvent(KeyEvent &event) override;
       void mousePressEvent(MouseEvent &event) override;
-      void cameraKeyPressEvent(KeyEvent &event);
       void drawTreeNodeBoundingBoxes();
       void mouseScrollEvent(MouseScrollEvent& event) override;
       void mouseMoveEvent(MouseMoveEvent& event) override;
@@ -108,7 +117,7 @@ namespace Magnum {
       btSequentialImpulseConstraintSolver _bSolver;
 
       Vector3                _lightRealPosition;
-      Vector3                _base_position;
+      Vector3                _basePosition;
       std::vector<Matrix4 *> _stackedRoboPos;
       std::vector<void *>    _stackedRoboTank;
       int                    _currentTankLevel;
@@ -119,7 +128,19 @@ namespace Magnum {
       bool _isPausing                  = false;
       bool _drawBoundingBoxes          = false;
       bool _animation                  = false;
+      bool _directionsPressed[5]       = {false};
 
+
+      ImGuiIntegration::Context _imgui{NoCreate};
+
+      bool _showDemoWindow = true;
+      bool _showAnotherWindow = false;
+      Color4 _clearColor = 0x72909aff_rgbaf;
+      Float _floatValue = 0.0f;
+      Float _basePositionX = 5.0f;
+      Float _basePositionY = 0.0f;
+      Float _basePositionZ = 5.0f;
+      Float _basePositionVerticalSpeed = 0.0f;
 
       /* Octree and boundary boxes */
       Containers::Pointer<int> _octree;
@@ -142,10 +163,26 @@ namespace Magnum {
 
       btBoxShape    _bBoxShape{{0.5f, 0.5f, 0.5f}};
       btSphereShape _bSphereShape{0.25f};
-      btBoxShape    _bGroundShape{{4.0f, 0.5f, 4.0f}};
+      btBoxShape    _bGroundShape{{20.0f, 0.5f, 20.0f}};
       btBoxShape    _roboTankShape{{1.0f, 0.5f, 0.5f}};
 
       bool _drawCubes{true}, _drawDebug{true}, _shootBox{true};
+
+      void drawImgui();
+
+      void initializeGui();
+
+      void drawStackDemo();
+
+      void shootItem(Vector2i startLocation, bool isBox);
+
+      void initializeRoboTank();
+
+      void playerControlStart(KeyEvent &event);
+
+      void playerControlEnd(KeyEvent &event);
+
+      void playerMovement(Float duration);
     };
 
     class ColoredDrawable : public SceneGraph::Drawable3D {
@@ -220,6 +257,7 @@ namespace Magnum {
         Configuration conf;
         conf.setTitle("Guanting Lu 2017152003 Example")
           .setSize(conf.size(), dpiScaling);
+        conf.setWindowFlags(Configuration::WindowFlag::Resizable);
         GLConfiguration glConf;
         // Work with DPI-awareness.
         glConf.setSampleCount(dpiScaling.max() < 2.0f ? 8 : 2);
@@ -284,30 +322,9 @@ namespace Magnum {
       /* Create the ground */
       auto *ground = new RigidBody{&_scene, 0.0f, &_bGroundShape, _bWorld};
       new ColoredDrawable{*ground, _boxInstanceData, 0xffffff_rgbf,
-                          Matrix4::scaling({4.0f, 0.5f, 4.0f}), _drawables};
+                          Matrix4::scaling({20.0f, 0.5f, 20.0f}), _drawables};
 
-      _base_position = Vector3{5.0f, 1.0f, 5.0f};
-      _currentTankLevel = 0;
-      _currentScale = 1.0;
-      Vector3 parent_position = _base_position;
-      for (int i = 0; i < 5; i++) {
-        Matrix4 *cur_relative_position = new Matrix4{0.0f};
-        *cur_relative_position = Matrix4::translation({0.0, 1.0, 0.0});
-        Vector3 cur_position = (*cur_relative_position).transformVector(parent_position);
-        /* Create the 'robotank' */
-        RigidBody *robotank = new RigidBody{&_scene, 0.0f, &_roboTankShape, _bWorld};
-        robotank->rigidBody().setCollisionFlags( robotank->rigidBody().getCollisionFlags() |
-                                 btCollisionObject::CF_KINEMATIC_OBJECT);
-        robotank->rigidBody().setActivationState(DISABLE_DEACTIVATION);
-        new ColoredDrawable{*robotank, _boxInstanceData, 0xffffff_rgbf,
-                            Matrix4::scaling({1.0f, 0.5f, 0.5f}), _drawables};
-
-        robotank->translate(cur_position);
-        parent_position = cur_position;
-        robotank->syncPose();
-        _stackedRoboPos.push_back(cur_relative_position);
-        _stackedRoboTank.push_back(robotank);
-      }
+      initializeRoboTank();
 
       /* Create boxes with random colors */
       Deg      hue = 42.0_degf;
@@ -324,6 +341,8 @@ namespace Magnum {
           }
         }
       }
+
+      initializeGui();
 
       /* Loop at 60 Hz max */
       setSwapInterval(1);
@@ -351,6 +370,8 @@ namespace Magnum {
       _shader.setLightPosition(_arcballCamera->camera()
                                .cameraMatrix()
                                .transformPoint(_lightRealPosition));
+
+      playerMovement(_timeline.previousFrameDuration());
 
 
       if (_drawCubes) {
@@ -381,23 +402,8 @@ namespace Magnum {
         _sphere.setInstanceCount(_sphereInstanceData.size());
         _shader.draw(_sphere);
 
-        Vector3 parent_position = _base_position;
-        CORRADE_ASSERT(_stackedRoboTank.size() == 5,
-                       "The list should contain 5 robot tank items.", );
-        for (int i = 0; i < 5; i++) {
-          Matrix4 *cur_relative_position = _stackedRoboPos.at(i);
-          Vector3 cur_position = (*cur_relative_position).transformPoint(parent_position);
-          /* Create the 'robotank' */
-          RigidBody *robotank = (RigidBody *) _stackedRoboTank.at(i);
-          CORRADE_ASSERT(robotank != NULL, "Should not be null", );
-          if (robotank && robotank->isAvailable()) {
-            robotank->resetTransformation();
-            robotank->translate(cur_position);
-            robotank->setDirty();
-            robotank->syncPose();
-          }
-          parent_position = cur_position;
-        }
+        drawStackDemo();
+
       }
 
       /* Debug draw. If drawing on top of cubes, avoid flickering by setting
@@ -417,6 +423,8 @@ namespace Magnum {
         }
       }
 
+      drawImgui();
+
       /* Update camera before drawing instances */
       bool moving = _arcballCamera->updateTransformation();
 
@@ -431,68 +439,47 @@ namespace Magnum {
     }
 
     void BulletExample::keyPressEvent(KeyEvent &event) {
+      if (_imgui.handleKeyPressEvent(event)) return;
+
+      playerControlStart(event);
+
       /* Toggling draw modes */
-      if (event.key() == KeyEvent::Key::D) {
-         if (_drawCubes && _drawDebug) {
-          _drawDebug = false;
-        } else if (_drawCubes && !_drawDebug) {
-          _drawCubes = false;
-          _drawDebug = true;
-        } else if (!_drawCubes && _drawDebug) {
-          _drawCubes = true;
-          _drawDebug = true;
+      if(event.key() == KeyEvent::Key::Zero|| event.key() == KeyEvent::Key::NumZero) {
+        _currentTankLevel = 0;
+        _currentScale = 1.0;
+      } else if(event.key() == KeyEvent::Key::One|| event.key() == KeyEvent::Key::NumOne) {
+        _currentTankLevel = 1;
+        _currentScale = 1.0;
+      } else if(event.key() == KeyEvent::Key::Two || event.key() == KeyEvent::Key::NumTwo) {
+        _currentTankLevel = 2;
+        _currentScale = 1.0;
+      } else if(event.key() == KeyEvent::Key::N) {
+        _animation ^= true;
+        int i = _currentTankLevel;
+        Matrix4 *cur_relative_position = _stackedRoboPos.at(i);
+        if (event.modifiers() & MouseMoveEvent::Modifier::Alt) {
+          if (event.modifiers() & MouseMoveEvent::Modifier::Shift) {
+            _currentScale -= 0.2;
+          } else {
+            _currentScale += 0.2;
+          }
+        } else {
+          if (event.modifiers() & MouseMoveEvent::Modifier::Shift) {
+            _currentScale -= 0.2;
+          } else {
+            _currentScale += 0.2;
+          }
         }
-        /* What to shoot */
-      } else if (event.key() == KeyEvent::Key::S) {
-        _shootBox ^= true;
-      } else {
-        cameraKeyPressEvent(event);
+        *cur_relative_position = Matrix4::translation({0.0, _currentScale, 0.0});
       }
       event.setAccepted();
+      redraw();
     }
 
     void BulletExample::shootOnClick(MouseEvent &event) {
-
       /* Shoot an object on click */
       if (event.button() == MouseEvent::Button::Left) {
-        /* First scale the position from being relative to window size to being
-           relative to framebuffer size as those two can be different on HiDPI
-           systems */
-        const Vector2i position   =
-                         event.position() * Vector2{framebufferSize()} /
-                         Vector2{windowSize()};
-        const Vector2  clickPoint = Vector2::yScale(-1.0f) *
-                                    (Vector2{position} /
-                                     Vector2{framebufferSize()} -
-                                     Vector2{0.5f}) * 1.0f;
-        // Then calculate the click point ?->yes
-        const Vector3  direction  =
-          (_arcballCamera->camera().object().absoluteTransformationMatrix().rotationScaling() *
-          Vector3{clickPoint, -1.0f}).normalized();
-
-        auto *object = new RigidBody{
-          &_scene,
-          _shootBox ? 1.0f : 5.0f,
-          _shootBox ? static_cast<btCollisionShape *>(&_bBoxShape)
-                    : &_bSphereShape,
-          _bWorld};
-
-        object->translate(
-          _arcballCamera->transformation().translation());
-        /* Has to be done explicitly after the translate() above, as Magnum ->
-           Bullet updates are implicitly done only for kinematic bodies */
-        object->syncPose();
-
-        /* Create either a box or a sphere */
-        new ColoredDrawable{*object,
-                            _shootBox ? _boxInstanceData : _sphereInstanceData,
-                            _shootBox ? 0x880000_rgbf : 0x220000_rgbf,
-                            Matrix4::scaling(Vector3{_shootBox ? 0.5f : 0.25f}),
-                            _drawables};
-
-        /* Give it an initial velocity */
-        object->rigidBody().setLinearVelocity(btVector3{direction * 25.f});
-
+        shootItem(event.position(), _shootBox);
         event.setAccepted();
       }
     }
@@ -538,61 +525,12 @@ namespace Magnum {
 
       _projectionMatrix = Matrix4::perspectiveProjection(_arcballCamera->fov(),
                                                          Vector2{event.framebufferSize()}.aspectRatio(), 0.01f, 100.0f);
-    }
-
-    void BulletExample::cameraKeyPressEvent(KeyEvent& event) {
-      if(event.key() == KeyEvent::Key::B) {
-        _drawBoundingBoxes ^= true;
-
-      } else if(event.key() == KeyEvent::Key::M) {
-        if((_collisionDetectionByOctree ^= true))
-          Debug{} << "Collision detection using octree";
-        else
-          Debug{} << "Collision detection using brute force";
-        /* Reset the profiler to avoid measurements of the two methods mixed
-           together */
-        if(_profiler.isEnabled()) _profiler.enable();
-
-      } else if(event.key() == KeyEvent::Key::P) {
-        if(_profiler.isEnabled()) _profiler.disable();
-        else _profiler.enable();
-
-      } else if(event.key() == KeyEvent::Key::R) {
-        _arcballCamera->reset();
-      } else if(event.key() == KeyEvent::Key::Zero|| event.key() == KeyEvent::Key::NumZero) {
-        _currentTankLevel = 0;
-        _currentScale = 1.0;
-      } else if(event.key() == KeyEvent::Key::One|| event.key() == KeyEvent::Key::NumOne) {
-        _currentTankLevel = 1;
-        _currentScale = 1.0;
-      } else if(event.key() == KeyEvent::Key::Two || event.key() == KeyEvent::Key::NumTwo) {
-        _currentTankLevel = 2;
-        _currentScale = 1.0;
-      } else if(event.key() == KeyEvent::Key::Space) {
-         _animation ^= true;
-        int i = _currentTankLevel;
-        Matrix4 *cur_relative_position = _stackedRoboPos.at(i);
-        if (event.modifiers() & MouseMoveEvent::Modifier::Alt) {
-          if (event.modifiers() & MouseMoveEvent::Modifier::Shift) {
-            _currentScale -= 0.2;
-          } else {
-            _currentScale += 0.2;
-          }
-        } else {
-          if (event.modifiers() & MouseMoveEvent::Modifier::Shift) {
-            _currentScale -= 0.2;
-          } else {
-            _currentScale += 0.2;
-          }
-        }
-        *cur_relative_position = Matrix4::translation({0.0, _currentScale, 0.0});
-      } else return;
-
-      event.setAccepted();
-      redraw();
+      _imgui.relayout(Vector2{event.windowSize()}/event.dpiScaling(),
+                      event.windowSize(), event.framebufferSize());
     }
 
     void BulletExample::mousePressEvent(MouseEvent& event) {
+      if(_imgui.handleMousePressEvent(event)) return;
       /* Enable mouse capture so the mouse can drag outside of the window */
       /** @todo replace once https://github.com/mosra/magnum/pull/419 is in */
       SDL_CaptureMouse(SDL_TRUE);
@@ -605,13 +543,15 @@ namespace Magnum {
       redraw(); /* camera has changed, redraw! */
     }
 
-    void BulletExample::mouseReleaseEvent(MouseEvent&) {
+    void BulletExample::mouseReleaseEvent(MouseEvent &event) {
       /* Disable mouse capture again */
       /** @todo replace once https://github.com/mosra/magnum/pull/419 is in */
+      if(_imgui.handleMouseReleaseEvent(event)) return;
       SDL_CaptureMouse(SDL_FALSE);
     }
 
     void BulletExample::mouseMoveEvent(MouseMoveEvent& event) {
+      if(_imgui.handleMouseMoveEvent(event)) return;
       if(!event.buttons()) return;
 
       if((event.modifiers() & MouseMoveEvent::Modifier::Shift) &&
@@ -627,6 +567,7 @@ namespace Magnum {
     }
 
     void BulletExample::mouseScrollEvent(MouseScrollEvent& event) {
+      if (_imgui.handleMouseMoveEvent(event)) return;
       const Float delta = event.offset().y();
       if(Math::abs(delta) < 1.0e-2f) return;
 
@@ -636,7 +577,272 @@ namespace Magnum {
       redraw(); /* camera has changed, redraw! */
     }
 
+    void BulletExample::drawImgui() {
 
+      _imgui.newFrame();
+
+      /* Enable text input, if needed */
+      if(ImGui::GetIO().WantTextInput && !isTextInputActive())
+        startTextInput();
+      else if(!ImGui::GetIO().WantTextInput && isTextInputActive())
+        stopTextInput();
+
+      /* 1. Show a simple window.
+         Tip: if we don't call ImGui::Begin()/ImGui::End() the widgets appear in
+         a window called "Debug" automatically */
+      {
+        ImGui::Text("Here are some controls over the tiered drawing scene.");
+        ImGui::Separator();
+        ImGui::SliderFloat("basePositionX", &_basePositionX, -8.0f, 8.0f);
+        ImGui::SliderFloat("basePositionY", &_basePositionY, -8.0f, 8.0f);
+        ImGui::SliderFloat("basePositionZ", &_basePositionZ, -8.0f, 8.0f);
+        ImGui::SliderInt("currentTankLevel", &_currentTankLevel, 0, 4);
+        if(ImGui::ColorEdit3("Clear Color", _clearColor.data()))
+          GL::Renderer::setClearColor(_clearColor);
+        if(ImGui::Button("Test Window"))
+          _showDemoWindow ^= true;
+        if(ImGui::Button("Another Window"))
+          _showAnotherWindow ^= true;
+        if(ImGui::Button("Reset camera position")) {
+          _arcballCamera->reset();
+        }
+        if(ImGui::Button("Shoot a ball")) {
+          Vector2i center = windowSize() / 2;
+          shootItem(center, false);
+        }
+        ImGui::SameLine();
+        if(ImGui::Button("Shoot a box")) {
+          Vector2i center = windowSize() / 2;
+          shootItem(center, true);
+        }
+        if(ImGui::Button("Choose what to shoot when click")) {
+          _shootBox ^= true;
+        }
+        if(ImGui::Button("Show wireframes")) {
+          if (_drawCubes && _drawDebug) {
+            _drawDebug = false;
+          } else if (_drawCubes && !_drawDebug) {
+            _drawCubes = false;
+            _drawDebug = true;
+          } else if (!_drawCubes && _drawDebug) {
+            _drawCubes = true;
+            _drawDebug = true;
+          }
+          /* What to shoot */
+        }
+        ImGui::Checkbox("Enable bounding box", &_drawBoundingBoxes);
+        if(ImGui::Button("Profiler collision")) {
+          if((_collisionDetectionByOctree ^= true))
+            Debug{} << "Collision detection using octree";
+          else
+            Debug{} << "Collision detection using brute force";
+          /* Reset the profiler to avoid measurements of the two methods mixed
+             together */
+          if(_profiler.isEnabled()) _profiler.enable();
+        }
+        if(ImGui::Button("Profiler enabling")) {
+          if(_profiler.isEnabled()) _profiler.disable();
+          else _profiler.enable();
+        }
+        ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+                    1000.0/Double(ImGui::GetIO().Framerate), Double(ImGui::GetIO().Framerate));
+      }
+
+      /* 2. Show another simple window, now using an explicit Begin/End pair */
+      if(_showAnotherWindow) {
+        ImGui::SetNextWindowSize(ImVec2(500, 100), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Another Window", &_showAnotherWindow);
+        ImGui::Text("Hello");
+        ImGui::End();
+      }
+
+      /* 3. Show the ImGui demo window. Most of the sample code is in
+         ImGui::ShowDemoWindow() */
+      if(_showDemoWindow) {
+        ImGui::SetNextWindowPos(ImVec2(650, 20), ImGuiCond_FirstUseEver);
+        ImGui::ShowDemoWindow();
+      }
+
+      /* Update application cursor */
+      _imgui.updateApplicationCursor(*this);
+
+      /* Set appropriate states. If you only draw ImGui, it is sufficient to
+         just enable blending and scissor test in the constructor. */
+      GL::Renderer::enable(GL::Renderer::Feature::Blending);
+      GL::Renderer::enable(GL::Renderer::Feature::ScissorTest);
+      GL::Renderer::disable(GL::Renderer::Feature::FaceCulling);
+      GL::Renderer::disable(GL::Renderer::Feature::DepthTest);
+
+      _imgui.drawFrame();
+
+      /* Reset state. Only needed if you want to draw something else with
+         different state after. */
+      GL::Renderer::enable(GL::Renderer::Feature::DepthTest);
+      GL::Renderer::enable(GL::Renderer::Feature::FaceCulling);
+      GL::Renderer::disable(GL::Renderer::Feature::ScissorTest);
+      GL::Renderer::disable(GL::Renderer::Feature::Blending);
+
+    }
+
+    void BulletExample::initializeGui() {
+      _imgui = ImGuiIntegration::Context(Vector2{windowSize()}/dpiScaling(),
+                                         windowSize(), framebufferSize());
+      /* Set up proper blending to be used by ImGui. There's a great chance
+       you'll need this exact behavior for the rest of your scene. If not, set
+       this only for the drawFrame() call. */
+      GL::Renderer::setBlendEquation(GL::Renderer::BlendEquation::Add,
+                                     GL::Renderer::BlendEquation::Add);
+      GL::Renderer::setBlendFunction(GL::Renderer::BlendFunction::SourceAlpha,
+                                     GL::Renderer::BlendFunction::OneMinusSourceAlpha);
+    }
+
+    void
+    BulletExample::keyReleaseEvent(Platform::Sdl2Application::KeyEvent &event) {
+      if(_imgui.handleKeyReleaseEvent(event)) return;
+      playerControlEnd(event);
+    }
+
+    void BulletExample::drawStackDemo() {
+
+      RigidBody *rootRigidBody = (RigidBody*) _stackedRoboTank[0];
+      _basePositionY = rootRigidBody->transformation().translation().y();
+
+      _basePosition     = Vector3{_basePositionX, _basePositionY, _basePositionZ};
+      Vector3 parent_position = _basePosition;
+      CORRADE_ASSERT(_stackedRoboTank.size() == 5,
+                     "The list should contain 5 robot tank items.", );
+
+      for (int i = 0; i < 5; i++) {
+        Matrix4 *cur_relative_position = _stackedRoboPos.at(i);
+        Vector3 cur_position = (*cur_relative_position).transformPoint(parent_position);
+        /* Create the 'robotank' */
+        RigidBody *robotank = (RigidBody *) _stackedRoboTank.at(i);
+        CORRADE_ASSERT(robotank != NULL, "Should not be null", );
+        if (robotank && robotank->isAvailable() && i > 0) {
+          robotank->resetTransformation();
+          robotank->translate(cur_position);
+          robotank->setDirty();
+          robotank->syncPose();
+        }
+        parent_position = cur_position;
+      }
+    }
+
+    void BulletExample::shootItem(Vector2i startLocation, bool isBox) {
+/* First scale the position from being relative to window size to being
+           relative to framebuffer size as those two can be different on HiDPI
+           systems */
+      const Vector2i position   = startLocation * Vector2{framebufferSize()} /
+                       Vector2{windowSize()};
+      const Vector2  clickPoint = Vector2::yScale(-1.0f) *
+                                  (Vector2{position} /
+                                   Vector2{framebufferSize()} -
+                                   Vector2{0.5f}) * 1.0f;
+      // Then calculate the click point ?->yes
+      const Vector3  direction  =
+                       (_arcballCamera->camera().object().absoluteTransformationMatrix().rotationScaling() *
+                        Vector3{clickPoint, -1.0f}).normalized();
+
+      auto *object = new RigidBody{
+        &_scene,
+        isBox ? 1.0f : 5.0f,
+        isBox ? static_cast<btCollisionShape *>(&_bBoxShape)
+                  : &_bSphereShape,
+        _bWorld};
+
+      object->translate(
+        _arcballCamera->transformation().translation());
+      /* Has to be done explicitly after the translate() above, as Magnum ->
+         Bullet updates are implicitly done only for kinematic bodies */
+      object->syncPose();
+
+      /* Create either a box or a sphere */
+      new ColoredDrawable{*object,
+                          isBox ? _boxInstanceData : _sphereInstanceData,
+                          isBox ? 0x880000_rgbf : 0x220000_rgbf,
+                          Matrix4::scaling(Vector3{isBox ? 0.5f : 0.25f}),
+                          _drawables};
+
+      /* Give it an initial velocity */
+      object->rigidBody().setLinearVelocity(btVector3{direction * 25.f});
+
+    }
+
+    void BulletExample::initializeRoboTank() {
+      _basePosition     = Vector3{_basePositionX, _basePositionY, _basePositionZ};
+      _currentTankLevel = 0;
+      _currentScale = 1.0;
+      Vector3 parent_position = _basePosition;
+      for (int i = 0; i < 5; i++) {
+        Matrix4 *cur_relative_position = new Matrix4{0.0f};
+        *cur_relative_position = Matrix4::translation({0.0, ((i == 0) ? (0.0f) : 1.0f), 0.0});
+        Vector3 cur_position = (*cur_relative_position).transformVector(parent_position);
+        /* Create the 'robotank' */
+        RigidBody *robotank = new RigidBody{&_scene, 80.0f, &_roboTankShape, _bWorld};
+        //        robotank->rigidBody().setCollisionFlags( robotank->rigidBody().getCollisionFlags() |
+        //                                                 btCollisionObject::CF_KINEMATIC_OBJECT);
+        //        robotank->rigidBody().setActivationState(DISABLE_DEACTIVATION);
+        new ColoredDrawable{*robotank, _boxInstanceData, 0xffffff_rgbf,
+                            Matrix4::scaling({1.0f, 0.5f, 0.5f}), _drawables};
+
+        robotank->translate(cur_position);
+        parent_position = cur_position;
+        robotank->syncPose();
+        _stackedRoboPos.push_back(cur_relative_position);
+        _stackedRoboTank.push_back(robotank);
+      }
+
+    }
+
+    void BulletExample::playerControlStart(KeyEvent &event) {
+      if (event.key() == KeyEvent::Key::W) {
+        _directionsPressed[0] = true;
+      } else if (event.key() == KeyEvent::Key::A) {
+        _directionsPressed[1] = true;
+      } else if (event.key() == KeyEvent::Key::S) {
+        _directionsPressed[2] = true;
+      } else if (event.key() == KeyEvent::Key::D) {
+        _directionsPressed[3] = true;
+      } else if (event.key() == KeyEvent::Key::Space) {
+        _directionsPressed[4] = true;
+      }
+    }
+    void BulletExample::playerControlEnd(KeyEvent &event) {
+      if (event.key() == KeyEvent::Key::W) {
+        _directionsPressed[0] = false;
+      } else if (event.key() == KeyEvent::Key::A) {
+        _directionsPressed[1] = false;
+      } else if (event.key() == KeyEvent::Key::S) {
+        _directionsPressed[2] = false;
+      } else if (event.key() == KeyEvent::Key::D) {
+        _directionsPressed[3] = false;
+      } else if (event.key() == KeyEvent::Key::Space) {
+        _directionsPressed[4] = false;
+      }
+    }
+    void BulletExample::playerMovement(Float duration) {
+      Float step = 0.1;
+      if(_directionsPressed[0]) {
+        _basePositionZ -= step;
+      }
+      if(_directionsPressed[2]) {
+        _basePositionZ += step;
+      }
+      if(_directionsPressed[1]) {
+        _basePositionX -= step;
+      }
+      if(_directionsPressed[3]) {
+        _basePositionX += step;
+      }
+      if (_directionsPressed[4]) {
+        // Jump now.
+        _basePositionVerticalSpeed = 0.1;
+        RigidBody *rigidBody = (RigidBody*) _stackedRoboTank[0];
+        rigidBody->rigidBody().setLinearVelocity(btVector3{0.0f, 0.1f, 0.0f});
+      } else {
+        _basePositionVerticalSpeed = 0.0;
+      }
+    }
   }
 }
 
