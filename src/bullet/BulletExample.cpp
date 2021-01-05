@@ -78,6 +78,8 @@
 #include "../arcball/ArcBall.h"
 #include "../arcball/ArcBallCamera.h"
 
+#include "TexturedTriangleShader.h"
+
 #ifdef CORRADE_TARGET_ANDROID
 #include <Magnum/Platform/AndroidApplication.h>
 #elif defined(CORRADE_TARGET_EMSCRIPTEN)
@@ -153,6 +155,7 @@ namespace Magnum {
       GL::Buffer                      _boxInstanceBuffer{
         NoCreate},                    _sphereInstanceBuffer{NoCreate};
       Shaders::Phong                  _shader{NoCreate};
+      TexturedTriangleShader          _customShader{NoCreate};
       BulletIntegration::DebugDraw    _debugDraw{NoCreate};
       Containers::Array<InstanceData> _boxInstanceData, _sphereInstanceData;
 
@@ -167,6 +170,8 @@ namespace Magnum {
       bool _drawBoundingBoxes          = false;
       bool _animation                  = false;
       bool _directionsPressed[5]       = {false};
+      bool _enableAutoShoot            = true;
+      const bool ENABLE_BOX_CENTRE     = false;
 
       /* Viewer related */
       Shaders::Phong _coloredShader{NoCreate}, _texturedShader{NoCreate};
@@ -191,6 +196,13 @@ namespace Magnum {
       Float _basePositionY = 0.0f;
       Float _basePositionZ = 5.0f;
       Float _basePositionVerticalSpeed = 0.0f;
+      Float _hueVal = 45.0f;
+
+      /* Custom shader object */
+      GL::Mesh      _mesh{NoCreate};
+      GL::Texture2D _texture{NoCreate};
+
+      Long _lastChecked = 0;
 
       /* Octree and boundary boxes */
       Containers::Pointer<int> _octree;
@@ -215,6 +227,8 @@ namespace Magnum {
       btSphereShape _bSphereShape{0.25f};
       btBoxShape    _bGroundShape{{20.0f, 0.5f, 20.0f}};
       btBoxShape    _roboTankShape{{1.0f, 0.5f, 0.5f}};
+      btBoxShape    _xwallShape{{5.0f, 5.0f, 0.5f}};
+      btBoxShape    _zwallShape{{0.5f, 5.0f, 5.0f}};
 
       bool _drawCubes{true}, _drawDebug{true}, _shootBox{true};
 
@@ -256,6 +270,9 @@ namespace Magnum {
       void importFile(const Arguments &arguments);
 
       void configureWindow();
+      void initializeCustomModel();
+      void autoShoot();
+      void createWall(const Vector3 &_xshape, const Vector3 &pos);
     };
 
     class ColoredDrawable : public SceneGraph::Drawable3D {
@@ -368,19 +385,22 @@ namespace Magnum {
                           Matrix4::scaling({20.0f, 0.5f, 20.0f}), _drawables};
 
       initializeRoboTank();
+      initializeCustomModel();
 
       /* Create boxes with random colors */
       Deg      hue = 42.0_degf;
       for (Int i   = 0; i != 5; ++i) {
         for (Int j = 0; j != 5; ++j) {
           for (Int k = 0; k != 5; ++k) {
-//            auto *o = new RigidBody{&_scene, 1.0f, &_bBoxShape, _bWorld};
-//            o->translate({i - 2.0f, j + 4.0f, k - 2.0f});
-//            o->syncPose();
-//            new ColoredDrawable{*o, _boxInstanceData,
-//                                Color3::fromHsv(
-//                                  {hue += 137.5_degf, 0.75f, 0.9f}),
-//                                Matrix4::scaling(Vector3{0.5f}), _drawables};
+            if (ENABLE_BOX_CENTRE) {
+              auto *o = new RigidBody{&_scene, 1.0f, &_bBoxShape, _bWorld};
+              o->translate({i - 2.0f, j + 4.0f, k - 2.0f});
+              o->syncPose();
+              new ColoredDrawable{*o, _boxInstanceData,
+                                  Color3::fromHsv(
+                                    {hue += 137.5_degf, 0.75f, 0.9f}),
+                                  Matrix4::scaling(Vector3{0.5f}), _drawables};
+            }
           }
         }
       }
@@ -445,6 +465,12 @@ namespace Magnum {
         _sphere.setInstanceCount(_sphereInstanceData.size());
         _shader.draw(_sphere);
 
+//        _customShader.setColor(0xffb2b2_rgbf)
+//          .setProjectionMatrix(_projectionMatrix)
+//          .setTransformationMatrix(_arcballCamera->viewMatrix() * _arcballCamera->transformationMatrix())
+//          //.setNormalMatrix(_arcballCamera->viewMatrix().normalMatrix())
+//          .bindTexture(_texture)
+//          .draw(_mesh);
       }
 
       /* Debug draw. If drawing on top of cubes, avoid flickering by setting
@@ -465,6 +491,7 @@ namespace Magnum {
       }
 
       drawImgui();
+      autoShoot();
 
       /* Update camera before drawing instances */
       bool moving = _arcballCamera->updateTransformation();
@@ -522,6 +549,15 @@ namespace Magnum {
       if (event.button() == MouseEvent::Button::Left) {
         shootItem(event.position(), _shootBox);
         event.setAccepted();
+      }
+    }
+
+    void BulletExample::autoShoot() {
+      if (time(NULL) - _lastChecked > 1 && _enableAutoShoot) {
+        _lastChecked = time(NULL);
+        /* Shoot an object on click */
+        Vector2i center = windowSize() / 2;
+        shootItem(center, false);
       }
     }
 
@@ -637,6 +673,7 @@ namespace Magnum {
         ImGui::SliderFloat("basePositionX", &_basePositionX, -8.0f, 8.0f);
         ImGui::SliderFloat("basePositionY", &_basePositionY, -8.0f, 8.0f);
         ImGui::SliderFloat("basePositionZ", &_basePositionZ, -8.0f, 8.0f);
+        ImGui::SliderFloat("Hue val", &_hueVal, 0.0f, 360.0f);
         ImGui::SliderInt("currentTankLevel", &_currentTankLevel, 0, 4);
         if(ImGui::ColorEdit3("Clear Color", _clearColor.data()))
           GL::Renderer::setClearColor(_clearColor);
@@ -672,6 +709,7 @@ namespace Magnum {
           /* What to shoot */
         }
         ImGui::Checkbox("Enable bounding box", &_drawBoundingBoxes);
+        ImGui::Checkbox("Enable auto shooting", &_enableAutoShoot);
         if(ImGui::Button("Profiler collision")) {
           if((_collisionDetectionByOctree ^= true))
             Debug{} << "Collision detection using octree";
@@ -771,7 +809,7 @@ namespace Magnum {
     }
 
     void BulletExample::shootItem(Vector2i startLocation, bool isBox) {
-/* First scale the position from being relative to window size to being
+      /* First scale the position from being relative to window size to being
            relative to framebuffer size as those two can be different on HiDPI
            systems */
       const Vector2i position   = startLocation * Vector2{framebufferSize()} /
@@ -798,10 +836,13 @@ namespace Magnum {
          Bullet updates are implicitly done only for kinematic bodies */
       object->syncPose();
 
+      Deg      hue = Deg(_hueVal);
+      Color3   color = Color3::fromHsv({hue, 0.75f, 0.9f});
+      _hueVal += 137.5;
       /* Create either a box or a sphere */
       new ColoredDrawable{*object,
                           isBox ? _boxInstanceData : _sphereInstanceData,
-                          isBox ? 0x880000_rgbf : 0x220000_rgbf,
+                          color,
                           Matrix4::scaling(Vector3{isBox ? 0.5f : 0.25f}),
                           _drawables};
 
@@ -815,6 +856,7 @@ namespace Magnum {
       _currentTankLevel = 0;
       _currentScale = 1.0;
       Vector3 parent_position = _basePosition;
+      Deg      hue = 42.0_degf;
       for (int i = 0; i < 5; i++) {
         Matrix4 *cur_relative_position = new Matrix4{0.0f};
         *cur_relative_position = Matrix4::translation({0.0, ((i == 0) ? (0.0f) : 1.0f), 0.0});
@@ -824,7 +866,8 @@ namespace Magnum {
         //        robotank->rigidBody().setCollisionFlags( robotank->rigidBody().getCollisionFlags() |
         //                                                 btCollisionObject::CF_KINEMATIC_OBJECT);
         //        robotank->rigidBody().setActivationState(DISABLE_DEACTIVATION);
-        new ColoredDrawable{*robotank, _boxInstanceData, 0xffffff_rgbf,
+        new ColoredDrawable{*robotank, _boxInstanceData, Color3::fromHsv(
+                            {hue += 137.5_degf, 0.75f, 0.9f}),
                             Matrix4::scaling({1.0f, 0.5f, 0.5f}), _drawables};
 
         robotank->translate(cur_position);
@@ -834,6 +877,25 @@ namespace Magnum {
         _stackedRoboTank.push_back(robotank);
       }
 
+      // initialize some walls;
+      Vector3 _xshape = {5.0, 5.0, 0.5};
+      createWall(_xshape, Vector3{2.5f, 5.0f, 5.0f});
+      createWall(_xshape, Vector3{2.5f, 5.0f, 10.0f});
+      createWall(_xshape, Vector3{6.5f, 5.0f, 12.0f});
+      createWall(_xshape, Vector3{6.5f, 5.0f, 16.0f});
+
+    }
+
+    void BulletExample::createWall(const Vector3 &_xshape,
+                                   const Vector3 &pos) {
+      RigidBody *onewall = new RigidBody{&_scene, 0.0f, &_xwallShape, _bWorld};
+      onewall->rigidBody().setCollisionFlags( onewall->rigidBody().getCollisionFlags() |
+                                               btCollisionObject::CF_KINEMATIC_OBJECT);
+      onewall->rigidBody().setActivationState(DISABLE_DEACTIVATION);
+      new ColoredDrawable{*onewall, _boxInstanceData, 0xffffff_rgbf,
+                          Matrix4::scaling(_xshape), _drawables};
+      onewall->translate(pos);
+      onewall->syncPose();
     }
 
     void BulletExample::playerControlStart(KeyEvent &event) {
@@ -921,20 +983,20 @@ namespace Magnum {
 
         /* Material not available / not loaded, use a default material */
         if(materialId == -1 || !materials[materialId]) {
-          new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], 0xffffff_rgbf, _drawables};
+          // new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], 0xffffff_rgbf, _drawables};
 
           /* Textured material. If the texture failed to load, again just use a
              default colored material. */
         } else if(materials[materialId]->flags()) {
           Containers::Optional<GL::Texture2D>& texture = _textures[materials[materialId]->diffuseTexture()];
-          if(texture)
-            new TexturedDrawable{*object, _texturedShader, *_meshes[objectData->instance()], *texture, _drawables};
-          else
-            new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], 0xffffff_rgbf, _drawables};
+//          if(texture)
+//            new TexturedDrawable{*object, _texturedShader, *_meshes[objectData->instance()], *texture, _drawables};
+//          else
+//            new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], 0xffffff_rgbf, _drawables};
 
           /* Color-only material */
         } else {
-          new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], materials[materialId]->diffuseColor(), _drawables};
+//          new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], materials[materialId]->diffuseColor(), _drawables};
         }
       }
 
@@ -950,7 +1012,7 @@ namespace Magnum {
       _shader = Shaders::Phong{
         Shaders::Phong::Flag::VertexColor |
         Shaders::Phong::Flag::InstancedTransformation};
-      _shader.setAmbientColor(0x101010_rgbf)
+      _shader.setAmbientColor(0x404040_rgbf)
         .setSpecularColor(0xffffff_rgbf)
         .setLightPosition(_arcballCamera->camera()
                             .cameraMatrix()
@@ -970,6 +1032,8 @@ namespace Magnum {
         .setAmbientColor(0x111111_rgbf)
         .setSpecularColor(0x111111_rgbf)
         .setShininess(80.0f);
+
+      _customShader = TexturedTriangleShader();
     }
     void BulletExample::setupCamera() {
       /* Setup camera */
@@ -1109,6 +1173,47 @@ namespace Magnum {
       if (!tryCreate(conf, glConf)) {
         create(conf, glConf.setSampleCount(0));
       }
+    }
+
+    void BulletExample::initializeCustomModel() {
+      struct TriangleVertex {
+        Vector2 position;
+        Vector2 textureCoordinates;
+      };
+      const TriangleVertex data[]{
+        {{-0.5f, -0.5f}, {0.0f, 0.0f}}, /* Left position and texture coordinate */
+        {{ 0.5f, -0.5f}, {1.0f, 0.0f}}, /* Right position and texture coordinate */
+        {{ 0.0f,  0.5f}, {0.5f, 1.0f}}  /* Top position and texture coordinate */
+      };
+
+      GL::Buffer buffer;
+      buffer.setData(data);
+      _mesh = GL::Mesh{};
+      _mesh.setCount(3)
+        .addVertexBuffer(std::move(buffer), 0,
+                         TexturedTriangleShader::Position{},
+                         TexturedTriangleShader::TextureCoordinates{});
+
+      /* Load TGA importer plugin */
+      PluginManager::Manager<Trade::AbstractImporter> manager;
+      Containers::Pointer<Trade::AbstractImporter> importer =
+                                                        manager.loadAndInstantiate("TgaImporter");
+      if(!importer) std::exit(1);
+
+      /* Load the texture */
+      const Utility::Resource rs{"textured-triangle-data"};
+      if(!importer->openData(rs.getRaw("stone.tga")))
+        std::exit(2);
+
+      /* Set texture data and parameters */
+      Containers::Optional<Trade::ImageData2D> image = importer->image2D(0);
+      CORRADE_INTERNAL_ASSERT(image);
+      _texture = GL::Texture2D{};
+      _texture.setWrapping(GL::SamplerWrapping::ClampToEdge)
+        .setMagnificationFilter(GL::SamplerFilter::Linear)
+        .setMinificationFilter(GL::SamplerFilter::Linear)
+        .setStorage(1, GL::textureFormat(image->format()), image->size())
+        .setSubImage(0, {}, *image);
     }
   }
 }

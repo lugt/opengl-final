@@ -63,9 +63,14 @@ endif()
 
 set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
 
+corrade_add_resource(BulletRESOURCES resources.conf)
+
 add_executable(magnum-bullet WIN32
         BulletExample.cpp
-        ../arcball/ArcBall.cpp)
+        ../arcball/ArcBall.cpp
+        TexturedTriangleShader.cpp
+        ${BulletRESOURCES})
+
 target_link_libraries(magnum-bullet PRIVATE
     Corrade::Main
     Magnum::Application
@@ -82,6 +87,7 @@ target_link_libraries(magnum-bullet PRIVATE
     MagnumIntegration::Bullet
     MagnumIntegration::ImGui
     MagnumPlugins::AssimpImporter
+    Magnum::TgaImporter
     Bullet::Collision
     Bullet::Dynamics)
 

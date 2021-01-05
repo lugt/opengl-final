@@ -53,7 +53,8 @@ target_link_libraries(magnum-textured-triangle PRIVATE
     Magnum::Application
     Magnum::GL
     Magnum::Magnum
-    Magnum::Trade)
+    Magnum::Trade
+    Magnum::TgaImporter)
 
 install(TARGETS magnum-textured-triangle DESTINATION ${MAGNUM_BINARY_INSTALL_DIR})
 
