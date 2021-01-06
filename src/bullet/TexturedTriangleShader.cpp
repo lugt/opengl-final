@@ -60,6 +60,7 @@ TexturedTriangleShader::TexturedTriangleShader() {
   _colorUniform = uniformLocation("color");
   _transformationMatrixUniform = uniformLocation("transformationMatrix");
   _projectionMatrixUniform = uniformLocation("projectionMatrix");
+  this->TextureUnit = uniformLocation("textureData");
   //  _ambientColorUniform = uniformLocation("ambientColor");
   //_normalMatrixUniform = uniformLocation("normalMatrix");
 }

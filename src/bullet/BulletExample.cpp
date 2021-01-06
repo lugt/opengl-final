@@ -50,6 +50,7 @@
 #include <Magnum/GL/Mesh.h>
 #include <Magnum/GL/Renderer.h>
 #include <Magnum/GL/Texture.h>
+#include <Magnum/GL/CubeMapTexture.h>
 #include <Magnum/GL/TextureFormat.h>
 #include <Magnum/Math/Constants.h>
 #include <Magnum/Math/Color.h>
@@ -79,6 +80,8 @@
 #include "../arcball/ArcBallCamera.h"
 
 #include "TexturedTriangleShader.h"
+
+#include "learnopengl/filesystem.h"
 
 #ifdef CORRADE_TARGET_ANDROID
 #include <Magnum/Platform/AndroidApplication.h>
@@ -174,12 +177,17 @@ namespace Magnum {
       const bool ENABLE_BOX_CENTRE     = false;
 
       /* Viewer related */
-      Shaders::Phong _coloredShader{NoCreate}, _texturedShader{NoCreate};
+      Shaders::Phong    _coloredShader{NoCreate},
+                        _texturedShader{NoCreate};
+      Shaders::Flat2D   _2dShader{NoCreate};
       Containers::Array<Containers::Optional<GL::Mesh>>      _meshes;
       Containers::Array<Containers::Optional<GL::Texture2D>> _textures;
       Object3D _manipulator;
       Containers::Pointer<Trade::AbstractImporter> _importer = nullptr;
       Containers::Pointer<PluginManager::Manager<Trade::AbstractImporter>> _manager = nullptr;
+
+      /* SKybox */
+      unsigned int _cubeMapTexture;
 
       /* Imgui */
       ImGuiIntegration::Context _imgui{NoCreate};
@@ -203,6 +211,7 @@ namespace Magnum {
       /* Custom shader object */
       GL::Mesh      _mesh{NoCreate};
       GL::Texture2D _texture{NoCreate};
+      GL::CubeMapTexture _skyboxTexture{NoCreate};
 
       Long _lastChecked = 0;
 
@@ -223,6 +232,7 @@ namespace Magnum {
       Containers::Optional<ArcBallCamera> _arcballCamera;
       Matrix4                             _projectionMatrix;
       SceneGraph::DrawableGroup3D         _drawables;
+      SceneGraph::DrawableGroup3D         _skyboxGroup;
       Timeline                            _timeline;
 
       btBoxShape    _bBoxShape{{0.5f, 0.5f, 0.5f}};
@@ -277,6 +287,14 @@ namespace Magnum {
       void autoShoot();
       void createWall(const Vector3 &_xshape, const Vector3 &pos);
       void importRealFile(const std::string filename, Object3D &parent);
+
+      void initializeSkybox();
+
+      void loadTextureFromImage(const std::string &filename);
+
+      void drawSkybox();
+
+      unsigned int loadCubemap(std::vector<std::string> vector);
     };
 
     class ColoredDrawable : public SceneGraph::Drawable3D {
@@ -332,6 +350,21 @@ namespace Magnum {
       GL::Texture2D& _texture;
     };
 
+    class TexturedWithPrimitiveDrawable: public SceneGraph::Drawable3D {
+    public:
+      explicit TexturedWithPrimitiveDrawable(Object3D &object, TexturedTriangleShader &shader,
+                                GL::Mesh &mesh, GL::CubeMapTexture &texture, const Matrix4 &primitive,
+                                SceneGraph::DrawableGroup3D &group)
+        : SceneGraph::Drawable3D{object, &group}, _localShader(shader),
+          _mesh(mesh), _texture(texture),_primitiveTransform(primitive) {}
+    private:
+      void draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) override;
+      TexturedTriangleShader& _localShader;
+      GL::Mesh& _mesh;
+      GL::CubeMapTexture& _texture;
+      Matrix4 _primitiveTransform;
+    };
+
     void NewColoredDrawable::draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) {
       _localShader
         .setTransformationMatrix(transformationMatrix)
@@ -347,6 +380,15 @@ namespace Magnum {
         .setNormalMatrix(transformationMatrix.normalMatrix())
         .setProjectionMatrix(camera.projectionMatrix())
         .bindDiffuseTexture(_texture)
+        .draw(_mesh);
+    }
+
+    void TexturedWithPrimitiveDrawable::draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) {
+      _localShader
+        .setTransformationMatrix(transformationMatrix * _primitiveTransform)
+        .setNormalMatrix(transformationMatrix.normalMatrix())
+        .setProjectionMatrix(camera.projectionMatrix())
+        .bindTexture(_texture)
         .draw(_mesh);
     }
 
@@ -392,6 +434,7 @@ namespace Magnum {
 
       initializeRoboTank();
       initializeCustomModel();
+      initializeSkybox();
 
       /* Create boxes with random colors */
       Deg      hue = 42.0_degf;
@@ -496,6 +539,10 @@ namespace Magnum {
         }
       }
 
+      // Blending
+
+      /* Draw the skybox */
+      drawSkybox();
       drawImgui();
       autoShoot();
 
@@ -572,37 +619,6 @@ namespace Magnum {
 
 
     void BulletExample::drawTreeNodeBoundingBoxes() {
-//      arrayResize(_boxInstanceData, 0);
-//
-//      /* Always draw the root node */
-//      arrayAppend(_boxInstanceData, Containers::InPlaceInit,
-//                  _arcballCamera->viewMatrix()*
-//                  Matrix4::translation(_octree->center())*
-//                  Matrix4::scaling(Vector3{_octree->halfWidth()}), 0x00ffff_rgbf);
-//
-//      /* Draw the remaining non-empty nodes */
-//      if(_drawBoundingBoxes) {
-//        const auto& activeTreeNodeBlocks = _octree->activeTreeNodeBlocks();
-//        for(OctreeNodeBlock* const pNodeBlock : activeTreeNodeBlocks) {
-//          for(std::size_t childIdx = 0; childIdx < 8; ++childIdx) {
-//            const OctreeNode& pNode = pNodeBlock->_nodes[childIdx];
-//
-//            /* Non-empty node */
-//            if(!pNode.isLeaf() || pNode.pointCount() > 0) {
-//              const Matrix4 t = _arcballCamera->viewMatrix() *
-//                                Matrix4::translation(pNode.center())*
-//                                Matrix4::scaling(Vector3{pNode.halfWidth()});
-//              arrayAppend(_boxInstanceData, Containers::InPlaceInit, t,
-//                          0x197f99_rgbf);
-//            }
-//          }
-//        }
-//      }
-//
-//      _boxInstanceBuffer.setData(_boxInstanceData, GL::BufferUsage::DynamicDraw);
-//      _boxMesh.setInstanceCount(_boxInstanceData.size());
-//      _boxShader.setTransformationProjectionMatrix(_projectionMatrix)
-//        .draw(_boxMesh);
     }
 
     void BulletExample::viewportEvent(ViewportEvent& event) {
@@ -1053,8 +1069,7 @@ namespace Magnum {
         .setSpecularColor(0xffffff_rgbf)
         .setShininess(80.0f);
 
-      _texturedShader = Shaders::Phong{
-        Shaders::Phong::Flag::DiffuseTexture};
+      _texturedShader = Shaders::Phong{Shaders::Phong::Flag::DiffuseTexture};
       _texturedShader
         .setAmbientColor(0x111111_rgbf)
         .setSpecularColor(0x111111_rgbf)
@@ -1127,9 +1142,10 @@ namespace Magnum {
           continue;
         }
 
-        Debug{} << "Importing image" << textureData->image() << _importer->image2DName(textureData->image());
+        UnsignedInt imageId = textureData->image();
+        Debug{} << "Importing image" << imageId << _importer->image2DName(imageId);
 
-        Containers::Optional<Trade::ImageData2D> imageData = _importer->image2D(textureData->image());
+        Containers::Optional<Trade::ImageData2D> imageData = _importer->image2D(imageId);
         GL::TextureFormat format;
         if(imageData && imageData->format() == PixelFormat::RGB8Unorm)
           format = GL::TextureFormat::RGB8;
@@ -1257,6 +1273,228 @@ namespace Magnum {
         .setMinificationFilter(GL::SamplerFilter::Linear)
         .setStorage(1, GL::textureFormat(image->format()), image->size())
         .setSubImage(0, {}, *image);
+    }
+
+    void BulletExample::loadTextureFromImage(const std::string & filename) {
+      Containers::Pointer<Trade::AbstractImporter> importer = _manager->loadAndInstantiate("TgaImporter");
+      if(!importer) std::exit(1);
+
+      /* Load the texture */
+      const Utility::Resource rs{"textured-triangle-data"};
+      if(!importer->openData(rs.getRaw("stone.tga")))
+        std::exit(2);
+
+      /* Set texture data and parameters */
+      Containers::Optional<Trade::ImageData2D> image = importer->image2D(0);
+      CORRADE_INTERNAL_ASSERT(image);
+      _texture.setWrapping(GL::SamplerWrapping::ClampToEdge)
+        .setMagnificationFilter(GL::SamplerFilter::Linear)
+        .setMinificationFilter(GL::SamplerFilter::Linear)
+        .setStorage(1, GL::textureFormat(image->format()), image->size())
+        .setSubImage(0, {}, *image);
+
+      std::vector<std::string> faces
+       {
+         FileSystem::getPath("resources/textures/skybox/right.jpg"),
+         FileSystem::getPath("resources/textures/skybox/left.jpg"),
+         FileSystem::getPath("resources/textures/skybox/top.jpg"),
+         FileSystem::getPath("resources/textures/skybox/bottom.jpg"),
+         FileSystem::getPath("resources/textures/skybox/front.jpg"),
+         FileSystem::getPath("resources/textures/skybox/back.jpg")
+       };
+
+      loadCubemap(faces);
+      return;
+
+      /* Load file */
+      if(!_importer->openFile(filename))
+        std::exit(4);
+
+      /* Load all textures. Textures that fail to load will be NullOpt. */
+      _textures = Containers::Array<Containers::Optional<GL::Texture2D>>{_importer->textureCount()};
+      for(UnsignedInt i = 0; i != _importer->textureCount(); ++i) {
+        Debug{} << "Importing texture" << i << _importer->textureName(i);
+
+        Containers::Optional<Trade::TextureData> textureData = _importer->texture(i);
+        if(!textureData || textureData->type() != Trade::TextureData::Type::Texture2D) {
+          Warning{} << "Cannot load texture properties, skipping";
+          continue;
+        }
+
+        UnsignedInt imageId = textureData->image();
+        Debug{} << "Importing image" << imageId << _importer->image2DName(imageId);
+
+        Containers::Optional<Trade::ImageData2D> imageData = _importer->image2D(imageId);
+        GL::TextureFormat format;
+        if(imageData && imageData->format() == PixelFormat::RGB8Unorm)
+          format = GL::TextureFormat::RGB8;
+        else if(imageData && imageData->format() == PixelFormat::RGBA8Unorm)
+          format = GL::TextureFormat::RGBA8;
+        else {
+          Warning{} << "Cannot load texture image, skipping";
+          continue;
+        }
+
+        /* Configure the texture */
+        GL::Texture2D texture;
+        texture
+          .setMagnificationFilter(textureData->magnificationFilter())
+          .setMinificationFilter(textureData->minificationFilter(), textureData->mipmapFilter())
+          .setWrapping(textureData->wrapping().xy())
+          .setStorage(Math::log2(imageData->size().max()) + 1, format, imageData->size())
+          .setSubImage(0, {}, *imageData)
+          .generateMipmap();
+
+        _textures[i] = std::move(texture);
+      }
+    }
+
+    void BulletExample::initializeSkybox() {
+      loadTextureFromImage("");
+      Vector3                       _skyboxScaling{20.0f, 20.0f, 20.0f};
+
+      struct TriangleVertex {
+        Vector3 position;
+        Vector2 textureCoordinates;
+      };
+      // set up vertex data (and buffer(s)) and configure vertex attributes
+      // ------------------------------------------------------------------
+      float cubeVertices[] = {
+        // positions          // texture Coords
+        -0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
+        0.5f, -0.5f, -0.5f,  1.0f, 0.0f,
+        0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+        0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+        -0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
+
+        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+        0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+        0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
+        0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
+        -0.5f,  0.5f,  0.5f,  0.0f, 1.0f,
+        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+
+        -0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+        -0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+        -0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+
+        0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+        0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+        0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+        0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+        0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+        0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+
+        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+        0.5f, -0.5f, -0.5f,  1.0f, 1.0f,
+        0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+        0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+
+        -0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
+        0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+        0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+        0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+        -0.5f,  0.5f,  0.5f,  0.0f, 0.0f,
+        -0.5f,  0.5f, -0.5f,  0.0f, 1.0f
+      };
+      float skyboxVertices[] = {
+        // positions
+        -1.0f,  1.0f, -1.0f,
+        -1.0f, -1.0f, -1.0f,
+        1.0f, -1.0f, -1.0f,
+        1.0f, -1.0f, -1.0f,
+        1.0f,  1.0f, -1.0f,
+        -1.0f,  1.0f, -1.0f,
+
+        -1.0f, -1.0f,  1.0f,
+        -1.0f, -1.0f, -1.0f,
+        -1.0f,  1.0f, -1.0f,
+        -1.0f,  1.0f, -1.0f,
+        -1.0f,  1.0f,  1.0f,
+        -1.0f, -1.0f,  1.0f,
+
+        1.0f, -1.0f, -1.0f,
+        1.0f, -1.0f,  1.0f,
+        1.0f,  1.0f,  1.0f,
+        1.0f,  1.0f,  1.0f,
+        1.0f,  1.0f, -1.0f,
+        1.0f, -1.0f, -1.0f,
+
+        -1.0f, -1.0f,  1.0f,
+        -1.0f,  1.0f,  1.0f,
+        1.0f,  1.0f,  1.0f,
+        1.0f,  1.0f,  1.0f,
+        1.0f, -1.0f,  1.0f,
+        -1.0f, -1.0f,  1.0f,
+
+        -1.0f,  1.0f, -1.0f,
+        1.0f,  1.0f, -1.0f,
+        1.0f,  1.0f,  1.0f,
+        1.0f,  1.0f,  1.0f,
+        -1.0f,  1.0f,  1.0f,
+        -1.0f,  1.0f, -1.0f,
+
+        -1.0f, -1.0f, -1.0f,
+        -1.0f, -1.0f,  1.0f,
+        1.0f, -1.0f, -1.0f,
+        1.0f, -1.0f, -1.0f,
+        -1.0f, -1.0f,  1.0f,
+        1.0f, -1.0f,  1.0f
+      };
+
+      GL::Buffer buffer;
+      buffer.setData(skyboxVertices);
+      GL::Mesh &mesh = *(new GL::Mesh());
+      mesh.setCount(36)
+        .addVertexBuffer(std::move(buffer), 0,
+                         TexturedTriangleShader::Position{});
+
+      // GL::Mesh                      skybox          = MeshTools::compile(Primitives::cubeSolid());
+      const Matrix4                 matrix4        = Matrix4::scaling(_skyboxScaling);
+      TexturedWithPrimitiveDrawable *skyboxDrawable = new TexturedWithPrimitiveDrawable
+        {_manipulator, _customShader, mesh, _skyboxTexture, matrix4, _skyboxGroup};
+    }
+
+    void BulletExample::drawSkybox() {
+      GL::Renderer::setDepthFunction(GL::Renderer::DepthFunction::LessOrEqual);
+      GL::Renderer::setFaceCullingMode(GL::Renderer::PolygonFacing::Front);
+      _arcballCamera->draw(_skyboxGroup);
+      GL::Renderer::setFaceCullingMode(GL::Renderer::PolygonFacing::Back);
+    }
+
+    unsigned int BulletExample::loadCubemap(std::vector<std::string> faces) {
+      Containers::Pointer<Trade::AbstractImporter> importer = _manager->loadAndInstantiate("JpegImporter");
+      if(!importer) std::exit(1);
+      _skyboxTexture = GL::CubeMapTexture{};
+      _skyboxTexture.setWrapping(GL::SamplerWrapping::ClampToEdge)
+        .setMagnificationFilter(GL::SamplerFilter::Linear)
+        .setMinificationFilter(GL::SamplerFilter::Linear);
+
+      GL::CubeMapCoordinate idx[] = {GL::CubeMapCoordinate::PositiveX,
+                                     GL::CubeMapCoordinate::NegativeX,
+                                     GL::CubeMapCoordinate::NegativeY,
+                                     GL::CubeMapCoordinate::PositiveY,
+                                     GL::CubeMapCoordinate::PositiveZ,
+                                     GL::CubeMapCoordinate::NegativeZ};
+      int i = 0;
+      for (auto oneFile: faces) {
+        if (!importer->openFile(oneFile))
+          std::exit(2);
+        /* Set texture data and parameters */
+        Containers::Optional<Trade::ImageData2D> image = importer->image2D(0);
+        CORRADE_INTERNAL_ASSERT(image);
+//          .setStorage(Math::log2(256)+1, GL::TextureFormat::RGBA8, {256, 256})
+        _skyboxTexture.setStorage(1, GL::textureFormat(image->format()), image->size())
+          .setSubImage(idx[i], 0, {}, *image);
+        i++;
+      }
+      return 0;
     }
   }
 }

@@ -31,14 +31,15 @@ uniform vec3 color = vec3(1.0, 1.0, 1.0);
 uniform mat3 ambientColor;
 uniform mat4 normalMatrix;
 
-uniform sampler2D textureData;
+// uniform sampler2D textureData;
+uniform samplerCube textureData;
 
-in vec2 interpolatedTextureCoordinates;
+in vec3 TexCoords;
 
 out vec4 fragmentColor;
 
 void main() {
 
-    fragmentColor.rgb = color*texture(textureData, interpolatedTextureCoordinates).rgb;
+    fragmentColor.rgb = color * texture(textureData, TexCoords).rgb;
     fragmentColor.a = 1.0;
 }

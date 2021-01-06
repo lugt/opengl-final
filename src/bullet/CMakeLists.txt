@@ -90,6 +90,7 @@ target_link_libraries(magnum-bullet PRIVATE
     MagnumPlugins::AssimpImporter
     MagnumPlugins::TinyGltfImporter
     MagnumPlugins::PngImporter
+    MagnumPlugins::JpegImporter
     Magnum::TgaImporter
     Bullet::Collision
     Bullet::Dynamics)

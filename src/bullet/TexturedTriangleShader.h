@@ -31,6 +31,7 @@
 
 #include <Magnum/GL/AbstractShaderProgram.h>
 #include <Magnum/GL/Texture.h>
+#include <Magnum/GL/CubeMapTexture.h>
 #include <Magnum/Math/Color.h>
 
 using namespace Magnum::Math::Literals;
@@ -48,14 +49,15 @@ class TexturedTriangleShader: public GL::AbstractShaderProgram {
         Int _transformationMatrixUniform{1},
             _projectionMatrixUniform{2},
             _ambientColorUniform{3},
-            _normalMatrixUniform{4};
+            _normalMatrixUniform{4},
+            TextureUnit;
 
         TexturedTriangleShader& setColor(const Color3& color) {
             setUniform(_colorUniform, color);
             return *this;
         }
 
-        TexturedTriangleShader& bindTexture(GL::Texture2D& texture) {
+        TexturedTriangleShader& bindTexture(GL::CubeMapTexture& texture) {
             texture.bind(TextureUnit);
             return *this;
         }
@@ -72,8 +74,6 @@ class TexturedTriangleShader: public GL::AbstractShaderProgram {
           return *this;
         }
     private:
-        enum: Int { TextureUnit = 0 };
-
         Int _colorUniform;
 };
 
