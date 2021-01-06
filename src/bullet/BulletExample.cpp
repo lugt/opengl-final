@@ -170,7 +170,7 @@ namespace Magnum {
       bool _drawBoundingBoxes          = false;
       bool _animation                  = false;
       bool _directionsPressed[5]       = {false};
-      bool _enableAutoShoot            = true;
+      bool _enableAutoShoot            = false;
       const bool ENABLE_BOX_CENTRE     = false;
 
       /* Viewer related */
@@ -178,6 +178,7 @@ namespace Magnum {
       Containers::Array<Containers::Optional<GL::Mesh>>      _meshes;
       Containers::Array<Containers::Optional<GL::Texture2D>> _textures;
       Object3D _manipulator;
+      std::string _importer;
 
       /* Imgui */
       ImGuiIntegration::Context _imgui{NoCreate};
@@ -230,6 +231,7 @@ namespace Magnum {
       btBoxShape    _xwallShape{{5.0f, 5.0f, 0.5f}};
       btBoxShape    _zwallShape{{0.5f, 5.0f, 5.0f}};
 
+
       bool _drawCubes{true}, _drawDebug{true}, _shootBox{true};
 
       // Display Parts & Event Handling
@@ -273,6 +275,7 @@ namespace Magnum {
       void initializeCustomModel();
       void autoShoot();
       void createWall(const Vector3 &_xshape, const Vector3 &pos);
+      void importRealFile(const std::string filename, Object3D &parent);
     };
 
     class ColoredDrawable : public SceneGraph::Drawable3D {
@@ -733,6 +736,16 @@ namespace Magnum {
                     1000.0/Double(ImGui::GetIO().Framerate), Double(ImGui::GetIO().Framerate));
       }
 
+      /**
+       * Show scene control window.
+       */
+      if(true) {
+        ImGui::SetNextWindowPos(ImVec2(650, 30), ImGuiCond_FirstUseEver);
+        if(ImGui::Button("Import object")) {
+          importRealFile("/Users/xc5/CLionProjects/opengl/magnum-examples/resources/objects/nanosuit/nanosuit.obj", _manipulator);
+        }
+      }
+
       /* 2. Show another simple window, now using an explicit Begin/End pair */
       if(_showAnotherWindow) {
         ImGui::SetNextWindowSize(ImVec2(500, 100), ImGuiCond_FirstUseEver);
@@ -1059,23 +1072,32 @@ namespace Magnum {
     void BulletExample::importFile(const Arguments &arguments) {
       Utility::Arguments args;
       args.addArgument("file").setHelp("file", "file to load")
-        .addOption("importer", "AnySceneImporter").setHelp("importer", "importer plugin to use")
+        .addOption("importer", "AnySceneImporter").setHelp("importer",
+                                                           "importer plugin to use")
         .addSkippedPrefix("magnum", "engine-specific options")
         .setGlobalHelp("Displays a 3D scene file provided on command line.")
         .parse(arguments.argc, arguments.argv);
 
       /* Base object, parent of all (for easy manipulation) */
       _manipulator.setParent(&_scene);
+      _importer = args.value("importer");
+      const std::string filename = args.value("file");
+      //importRealFile(filename, _manipulator);
+    }
 
+    /**
+     * Import a file into the scene.
+     */
+    void BulletExample::importRealFile(const std::string filename, Object3D &parent) {
       /* Load a scene importer plugin */
       PluginManager::Manager<Trade::AbstractImporter> manager;
-      Containers::Pointer<Trade::AbstractImporter> importer = manager.loadAndInstantiate(args.value("importer"));
+      Containers::Pointer<Trade::AbstractImporter> importer = manager.loadAndInstantiate(_importer);
       if(!importer) std::exit(1);
 
-      Debug{} << "Opening file" << args.value("file");
+      Debug{} << "Opening file" << filename;
 
       /* Load file */
-      if(!importer->openFile(args.value("file")))
+      if(!importer->openFile(filename))
         std::exit(4);
 
       /* Load all textures. Textures that fail to load will be NullOpt. */
@@ -1158,12 +1180,12 @@ namespace Magnum {
 
         /* Recursively add all children */
         for(UnsignedInt objectId: sceneData->children3D())
-          addObject(*importer, materials, _manipulator, objectId);
+          addObject(*importer, materials, parent, objectId);
 
         /* The format has no scene support, display just the first loaded mesh with
            a default material and be done with it */
       } else if(!_meshes.empty() && _meshes[0])
-        new NewColoredDrawable{_manipulator, _coloredShader, *_meshes[0], 0xffffff_rgbf, _drawables};
+        new NewColoredDrawable{parent, _coloredShader, *_meshes[0], 0xffffff_rgbf, _drawables};
     }
 
     void BulletExample::configureWindow() {
