@@ -178,7 +178,8 @@ namespace Magnum {
       Containers::Array<Containers::Optional<GL::Mesh>>      _meshes;
       Containers::Array<Containers::Optional<GL::Texture2D>> _textures;
       Object3D _manipulator;
-      std::string _importer;
+      Containers::Pointer<Trade::AbstractImporter> _importer = nullptr;
+      Containers::Pointer<PluginManager::Manager<Trade::AbstractImporter>> _manager = nullptr;
 
       /* Imgui */
       ImGuiIntegration::Context _imgui{NoCreate};
@@ -419,8 +420,7 @@ namespace Magnum {
     }
 
     void BulletExample::drawEvent() {
-      GL::defaultFramebuffer.clear(
-        GL::FramebufferClear::Color | GL::FramebufferClear::Depth);
+      GL::defaultFramebuffer.clear(GL::FramebufferClear::Color | GL::FramebufferClear::Depth);
 
       /* Housekeeping: remove any objects which are far away from the origin */
       for (Object3D *obj = _scene.children().first(); obj;) {
@@ -505,7 +505,7 @@ namespace Magnum {
       swapBuffers();
       if (!_isPausing) {
         _timeline.nextFrame();
-        moving = true;
+        redraw();
       }
 
       /* If the camera is moving or the animation is running, redraw immediately */
@@ -513,6 +513,7 @@ namespace Magnum {
     }
 
     void BulletExample::keyPressEvent(KeyEvent &event) {
+      redraw();
       if (_imgui.handleKeyPressEvent(event)) return;
 
       playerControlStart(event);
@@ -528,7 +529,7 @@ namespace Magnum {
         _currentTankLevel = 2;
         _currentScale = 1.0;
       } else if(event.key() == KeyEvent::Key::N) {
-        _animation ^= true;
+        _animation = true;
         int i = _currentTankLevel;
         Matrix4 *cur_relative_position = _stackedRoboPos.at(i);
         if (event.modifiers() & MouseMoveEvent::Modifier::Alt) {
@@ -552,6 +553,7 @@ namespace Magnum {
 
     void BulletExample::shootOnClick(MouseEvent &event) {
       /* Shoot an object on click */
+      redraw();
       if (event.button() == MouseEvent::Button::Left) {
         shootItem(event.position(), _shootBox);
         event.setAccepted();
@@ -564,6 +566,7 @@ namespace Magnum {
         /* Shoot an object on click */
         Vector2i center = windowSize() / 2;
         shootItem(center, false);
+        redraw();
       }
     }
 
@@ -610,9 +613,11 @@ namespace Magnum {
                                                          Vector2{event.framebufferSize()}.aspectRatio(), 0.01f, 100.0f);
       _imgui.relayout(Vector2{event.windowSize()}/event.dpiScaling(),
                       event.windowSize(), event.framebufferSize());
+      redraw();
     }
 
     void BulletExample::mousePressEvent(MouseEvent& event) {
+      redraw();
       if(_imgui.handleMousePressEvent(event)) return;
       /* Enable mouse capture so the mouse can drag outside of the window */
       /** @todo replace once https://github.com/mosra/magnum/pull/419 is in */
@@ -631,6 +636,7 @@ namespace Magnum {
       /** @todo replace once https://github.com/mosra/magnum/pull/419 is in */
       if(_imgui.handleMouseReleaseEvent(event)) return;
       SDL_CaptureMouse(SDL_FALSE);
+      redraw();
     }
 
     void BulletExample::mouseMoveEvent(MouseMoveEvent& event) {
@@ -741,9 +747,14 @@ namespace Magnum {
        */
       if(true) {
         ImGui::SetNextWindowPos(ImVec2(650, 30), ImGuiCond_FirstUseEver);
-        if(ImGui::Button("Import object")) {
+        ImGui::Begin("Scene control window", &_showAnotherWindow);
+        if(ImGui::Button("Import nanosuit")) {
           importRealFile("/Users/xc5/CLionProjects/opengl/magnum-examples/resources/objects/nanosuit/nanosuit.obj", _manipulator);
         }
+        if(ImGui::Button("Import city")) {
+          importRealFile("/Users/xc5/CLionProjects/opengl/magnum-examples/resources/3dmodel/city-circular/city.obj", _manipulator);
+        }
+        ImGui::End();
       }
 
       /* 2. Show another simple window, now using an explicit Begin/End pair */
@@ -981,9 +992,7 @@ namespace Magnum {
     }
 
     void BulletExample::addObject(Trade::AbstractImporter &importer,
-                                  Containers::ArrayView<const
-                                  Containers::Optional<Trade::PhongMaterialData>
-                                  > materials,
+                                  Containers::ArrayView<const Containers::Optional<Trade::PhongMaterialData>> materials,
                                   Object3D &parent, UnsignedInt i) {
       Debug{} << "Importing object" << i << importer.object3DName(i);
       Containers::Pointer<Trade::ObjectData3D> objectData = importer.object3D(i);
@@ -1080,8 +1089,12 @@ namespace Magnum {
 
       /* Base object, parent of all (for easy manipulation) */
       _manipulator.setParent(&_scene);
-      _importer = args.value("importer");
+      const std::string importerName = args.value("importer");
       const std::string filename = args.value("file");
+      PluginManager::Manager<Trade::AbstractImporter> *importer = new PluginManager::Manager<Trade::AbstractImporter>();
+      _manager = Containers::Pointer<PluginManager::Manager<Trade::AbstractImporter>> (importer);
+      _importer = _manager->loadAndInstantiate(importerName);
+      if(!_importer) std::exit(1);
       //importRealFile(filename, _manipulator);
     }
 
@@ -1090,30 +1103,33 @@ namespace Magnum {
      */
     void BulletExample::importRealFile(const std::string filename, Object3D &parent) {
       /* Load a scene importer plugin */
-      PluginManager::Manager<Trade::AbstractImporter> manager;
-      Containers::Pointer<Trade::AbstractImporter> importer = manager.loadAndInstantiate(_importer);
-      if(!importer) std::exit(1);
 
       Debug{} << "Opening file" << filename;
 
       /* Load file */
-      if(!importer->openFile(filename))
+      if(!_importer->openFile(filename))
         std::exit(4);
 
       /* Load all textures. Textures that fail to load will be NullOpt. */
-      _textures = Containers::Array<Containers::Optional<GL::Texture2D>>{importer->textureCount()};
-      for(UnsignedInt i = 0; i != importer->textureCount(); ++i) {
-        Debug{} << "Importing texture" << i << importer->textureName(i);
+      //      Int originalSize = 0;
+      //      if (_textures.size() > 0) {
+      //        originalSize = _textures.size();
+      //      }
 
-        Containers::Optional<Trade::TextureData> textureData = importer->texture(i);
+      // Textures
+      _textures = Containers::Array<Containers::Optional<GL::Texture2D>>{_importer->textureCount()};
+      for(UnsignedInt i = 0; i != _importer->textureCount(); ++i) {
+        Debug{} << "Importing texture" << i << _importer->textureName(i);
+
+        Containers::Optional<Trade::TextureData> textureData = _importer->texture(i);
         if(!textureData || textureData->type() != Trade::TextureData::Type::Texture2D) {
           Warning{} << "Cannot load texture properties, skipping";
           continue;
         }
 
-        Debug{} << "Importing image" << textureData->image() << importer->image2DName(textureData->image());
+        Debug{} << "Importing image" << textureData->image() << _importer->image2DName(textureData->image());
 
-        Containers::Optional<Trade::ImageData2D> imageData = importer->image2D(textureData->image());
+        Containers::Optional<Trade::ImageData2D> imageData = _importer->image2D(textureData->image());
         GL::TextureFormat format;
         if(imageData && imageData->format() == PixelFormat::RGB8Unorm)
           format = GL::TextureFormat::RGB8;
@@ -1140,11 +1156,11 @@ namespace Magnum {
       /* Load all materials. Materials that fail to load will be NullOpt. The
          data will be stored directly in objects later, so save them only
          temporarily. */
-      Containers::Array<Containers::Optional<Trade::PhongMaterialData>> materials{importer->materialCount()};
-      for(UnsignedInt i = 0; i != importer->materialCount(); ++i) {
-        Debug{} << "Importing material" << i << importer->materialName(i);
+      Containers::Array<Containers::Optional<Trade::PhongMaterialData>> materials{_importer->materialCount()};
+      for(UnsignedInt i = 0; i != _importer->materialCount(); ++i) {
+        Debug{} << "Importing material" << i << _importer->materialName(i);
 
-        Containers::Pointer<Trade::AbstractMaterialData> materialData = importer->material(i);
+        Containers::Pointer<Trade::AbstractMaterialData> materialData = _importer->material(i);
         if(!materialData || !(materialData->type() == Trade::MaterialType::Phong)) {
           Warning{} << "Cannot load material, skipping";
           continue;
@@ -1154,11 +1170,11 @@ namespace Magnum {
       }
 
       /* Load all meshes. Meshes that fail to load will be NullOpt. */
-      _meshes = Containers::Array<Containers::Optional<GL::Mesh>>{importer->meshCount()};
-      for(UnsignedInt i = 0; i != importer->meshCount(); ++i) {
-        Debug{} << "Importing mesh" << i << importer->meshName(i);
+      _meshes = Containers::Array<Containers::Optional<GL::Mesh>>{_importer->meshCount()};
+      for(UnsignedInt i = 0; i != _importer->meshCount(); ++i) {
+        Debug{} << "Importing mesh" << i << _importer->meshName(i);
 
-        Containers::Optional<Trade::MeshData> meshData = importer->mesh(i);
+        Containers::Optional<Trade::MeshData> meshData = _importer->mesh(i);
         if(!meshData || !meshData->hasAttribute(Trade::MeshAttribute::Normal) || meshData->primitive() != MeshPrimitive::Triangles) {
           Warning{} << "Cannot load the mesh, skipping";
           continue;
@@ -1169,10 +1185,10 @@ namespace Magnum {
       }
 
       /* Load the scene */
-      if(importer->defaultScene() != -1) {
-        Debug{} << "Adding default scene" << importer->sceneName(importer->defaultScene());
+      if(_importer->defaultScene() != -1) {
+        Debug{} << "Adding default scene" << _importer->sceneName(_importer->defaultScene());
 
-        Containers::Optional<Trade::SceneData> sceneData = importer->scene(importer->defaultScene());
+        Containers::Optional<Trade::SceneData> sceneData = _importer->scene(_importer->defaultScene());
         if(!sceneData) {
           Error{} << "Cannot load scene, exiting";
           return;
@@ -1180,7 +1196,7 @@ namespace Magnum {
 
         /* Recursively add all children */
         for(UnsignedInt objectId: sceneData->children3D())
-          addObject(*importer, materials, parent, objectId);
+          addObject(*_importer, materials, parent, objectId);
 
         /* The format has no scene support, display just the first loaded mesh with
            a default material and be done with it */
