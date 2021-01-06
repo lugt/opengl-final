@@ -1,5 +1,3 @@
-#version 330
-
 /*
     This file is part of Magnum.
 

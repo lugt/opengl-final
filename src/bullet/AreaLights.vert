@@ -1,5 +1,3 @@
-#version 330
-
 /*
     This file is part of Magnum.
 
@@ -31,6 +29,7 @@
     IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
     CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
+
 layout(location = 0) in vec4 position;
 layout(location = 2) in vec3 normal;
 

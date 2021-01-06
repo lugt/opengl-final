@@ -145,8 +145,9 @@ if(WITH_TRIANGLE_VULKAN_EXAMPLE)
 endif()
 
 if(WITH_VIEWER_EXAMPLE)
-    add_subdirectory(viewer)
+
 endif()
+add_subdirectory(viewer)
 
 if(WITH_WEBXR_EXAMPLE)
     add_subdirectory(webxr)

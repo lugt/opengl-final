@@ -57,6 +57,7 @@ target_link_libraries(magnum-arealights PRIVATE
     Magnum::Magnum
     Magnum::Shaders
     Magnum::Trade
+    MagnumPlugins::DdsImporter
     MagnumExtras::Ui)
 
 install(TARGETS magnum-arealights DESTINATION ${MAGNUM_BINARY_INSTALL_DIR})

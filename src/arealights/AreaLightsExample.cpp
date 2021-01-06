@@ -70,13 +70,13 @@ class AreaLightShader: public GL::AbstractShaderProgram {
         explicit AreaLightShader(NoCreateT): GL::AbstractShaderProgram{NoCreate} {}
 
         explicit AreaLightShader() {
-            MAGNUM_ASSERT_GL_VERSION_SUPPORTED(GL::Version::GL430);
+            MAGNUM_ASSERT_GL_VERSION_SUPPORTED(GL::Version::GL410);
 
             /* Load and compile shaders from compiled-in resource */
             Utility::Resource rs("arealights-data");
 
-            GL::Shader vert{GL::Version::GL430, GL::Shader::Type::Vertex};
-            GL::Shader frag{GL::Version::GL430, GL::Shader::Type::Fragment};
+            GL::Shader vert{GL::Version::GL410, GL::Shader::Type::Vertex};
+            GL::Shader frag{GL::Version::GL410, GL::Shader::Type::Fragment};
 
             vert.addSource(rs.get("AreaLights.vert"));
             frag.addSource(rs.get("AreaLights.frag"));

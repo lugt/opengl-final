@@ -303,40 +303,42 @@ namespace Magnum {
       explicit NewColoredDrawable(Object3D &object, Shaders::Phong &shader,
                                   GL::Mesh &mesh, const Color4 &color,
                                   SceneGraph::DrawableGroup3D &group)
-        : SceneGraph::Drawable3D{object, &group}, _shader(shader), _mesh(mesh),
+        : SceneGraph::Drawable3D{object, &group}, _localShader(shader), _mesh(mesh),
           _color{color} {}
 
     private:
       void draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) override;
 
-      Shaders::Phong& _shader;
+      Shaders::Phong& _localShader;
       GL::Mesh& _mesh;
       Color4 _color;
     };
 
     class TexturedDrawable: public SceneGraph::Drawable3D {
     public:
-      explicit TexturedDrawable(Object3D& object, Shaders::Phong& shader, GL::Mesh& mesh, GL::Texture2D& texture, SceneGraph::DrawableGroup3D& group): SceneGraph::Drawable3D{object, &group}, _shader(shader), _mesh(mesh), _texture(texture) {}
+      explicit TexturedDrawable(Object3D &object, Shaders::Phong &shader,
+                                GL::Mesh &mesh, GL::Texture2D &texture,
+                                SceneGraph::DrawableGroup3D &group)
+        : SceneGraph::Drawable3D{object, &group}, _localShader(shader),
+          _mesh(mesh), _texture(texture) {}
     private:
       void draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) override;
-      Shaders::Phong& _shader;
+      Shaders::Phong& _localShader;
       GL::Mesh& _mesh;
       GL::Texture2D& _texture;
     };
 
     void NewColoredDrawable::draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) {
-      _shader
-        .setDiffuseColor(_color)
-        .setLightPosition(camera.cameraMatrix().transformPoint(_lightRealPosition))
+      _localShader
         .setTransformationMatrix(transformationMatrix)
         .setNormalMatrix(transformationMatrix.normalMatrix())
         .setProjectionMatrix(camera.projectionMatrix())
+        .setDiffuseColor(_color)
         .draw(_mesh);
     }
 
     void TexturedDrawable::draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) {
-      _shader
-        .setLightPosition(camera.cameraMatrix().transformPoint(_lightRealPosition))
+      _localShader
         .setTransformationMatrix(transformationMatrix)
         .setNormalMatrix(transformationMatrix.normalMatrix())
         .setProjectionMatrix(camera.projectionMatrix())
@@ -349,9 +351,9 @@ namespace Magnum {
       /* Try 8x MSAA, fall back to zero samples if not possible. Enable only 2x
          MSAA if we have enough DPI. */
       configureWindow();
-      importFile(arguments);
       setupCamera();
       prepareShaders();
+      importFile(arguments);
 
       /* Box and sphere mesh, with an (initially empty) instance buffer */
       _box                  = MeshTools::compile(Primitives::cubeSolid());
@@ -441,16 +443,24 @@ namespace Magnum {
       arrayResize(_boxInstanceData, 0);
       arrayResize(_sphereInstanceData, 0);
       bool camChanged = _arcballCamera->update();
+
+      _texturedShader
+        .setLightPosition(_arcballCamera->camera().cameraMatrix().transformPoint(_lightRealPosition));
+      _coloredShader
+        .setLightPosition(_arcballCamera->camera().cameraMatrix().transformPoint(_lightRealPosition));
       _arcballCamera->draw(_drawables);
-      _shader.setProjectionMatrix(_projectionMatrix)
-        .setTransformationMatrix(_arcballCamera->viewMatrix() * _arcballCamera->transformationMatrix())
-        .setNormalMatrix(_arcballCamera->viewMatrix().normalMatrix());
 
 
       if (_drawCubes) {
         /* Call arcball update in every frame. This will do nothing if the camera
          has not been changed. Otherwise, camera transformation will be
          propagated into the camera objects. */
+        _shader.setLightPosition(_arcballCamera->camera()
+                                   .cameraMatrix()
+                                   .transformPoint(_lightRealPosition));
+        _shader.setProjectionMatrix(_projectionMatrix)
+          .setTransformationMatrix(_arcballCamera->viewMatrix() * _arcballCamera->transformationMatrix())
+          .setNormalMatrix(_arcballCamera->viewMatrix().normalMatrix());
 
         /* Upload instance data to the GPU (orphaning the previous buffer
            contents) and draw all cubes in one call, and all spheres (if any)
@@ -464,13 +474,6 @@ namespace Magnum {
                                       GL::BufferUsage::DynamicDraw);
         _sphere.setInstanceCount(_sphereInstanceData.size());
         _shader.draw(_sphere);
-
-//        _customShader.setColor(0xffb2b2_rgbf)
-//          .setProjectionMatrix(_projectionMatrix)
-//          .setTransformationMatrix(_arcballCamera->viewMatrix() * _arcballCamera->transformationMatrix())
-//          //.setNormalMatrix(_arcballCamera->viewMatrix().normalMatrix())
-//          .bindTexture(_texture)
-//          .draw(_mesh);
       }
 
       /* Debug draw. If drawing on top of cubes, avoid flickering by setting
@@ -675,6 +678,9 @@ namespace Magnum {
         ImGui::SliderFloat("basePositionZ", &_basePositionZ, -8.0f, 8.0f);
         ImGui::SliderFloat("Hue val", &_hueVal, 0.0f, 360.0f);
         ImGui::SliderInt("currentTankLevel", &_currentTankLevel, 0, 4);
+        ImGui::SliderFloat("lightPositionX", _lightRealPosition.data(), -100.0f, 100.0f);
+        ImGui::SliderFloat("lightPositionY", _lightRealPosition.data() + 1, -100.0f, 100.0f);
+        ImGui::SliderFloat("lightPositionZ", _lightRealPosition.data() + 2, -100.0f, 100.0f);
         if(ImGui::ColorEdit3("Clear Color", _clearColor.data()))
           GL::Renderer::setClearColor(_clearColor);
         if(ImGui::Button("Test Window"))
@@ -983,20 +989,20 @@ namespace Magnum {
 
         /* Material not available / not loaded, use a default material */
         if(materialId == -1 || !materials[materialId]) {
-          // new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], 0xffffff_rgbf, _drawables};
+           new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], 0xffffff_rgbf, _drawables};
 
           /* Textured material. If the texture failed to load, again just use a
              default colored material. */
-        } else if(materials[materialId]->flags()) {
+        } else if(materials[materialId]->flags() & Trade::PhongMaterialData::Flag::DiffuseTexture) {
           Containers::Optional<GL::Texture2D>& texture = _textures[materials[materialId]->diffuseTexture()];
-//          if(texture)
-//            new TexturedDrawable{*object, _texturedShader, *_meshes[objectData->instance()], *texture, _drawables};
-//          else
-//            new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], 0xffffff_rgbf, _drawables};
+          if(texture)
+            new TexturedDrawable{*object, _texturedShader, *_meshes[objectData->instance()], *texture, _drawables};
+          else
+            new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], 0xffffff_rgbf, _drawables};
 
           /* Color-only material */
         } else {
-//          new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], materials[materialId]->diffuseColor(), _drawables};
+          new NewColoredDrawable{*object, _coloredShader, *_meshes[objectData->instance()], materials[materialId]->diffuseColor(), _drawables};
         }
       }
 
@@ -1006,28 +1012,27 @@ namespace Magnum {
     }
 
     void BulletExample::prepareShaders() {
-      _lightRealPosition = {0.0f, 10.0f, 0.0f};
+      _lightRealPosition = {0.0f, 80.0f, 80.0f};
 
       /* Create an instanced shader */
       _shader = Shaders::Phong{
         Shaders::Phong::Flag::VertexColor |
         Shaders::Phong::Flag::InstancedTransformation};
+
       _shader.setAmbientColor(0x404040_rgbf)
         .setSpecularColor(0xffffff_rgbf)
         .setLightPosition(_arcballCamera->camera()
                             .cameraMatrix()
                             .transformPoint(_lightRealPosition));
-      _coloredShader = Shaders::Phong{
-        Shaders::Phong::Flag::VertexColor |
-        Shaders::Phong::Flag::InstancedTransformation};
+
+      _coloredShader = Shaders::Phong{};
       _coloredShader
         .setAmbientColor(0x111111_rgbf)
         .setSpecularColor(0xffffff_rgbf)
         .setShininess(80.0f);
 
       _texturedShader = Shaders::Phong{
-        Shaders::Phong::Flag::DiffuseTexture |
-        Shaders::Phong::Flag::InstancedTransformation};
+        Shaders::Phong::Flag::DiffuseTexture};
       _texturedShader
         .setAmbientColor(0x111111_rgbf)
         .setSpecularColor(0x111111_rgbf)

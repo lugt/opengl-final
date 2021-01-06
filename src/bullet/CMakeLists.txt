@@ -69,6 +69,7 @@ add_executable(magnum-bullet WIN32
         BulletExample.cpp
         ../arcball/ArcBall.cpp
         TexturedTriangleShader.cpp
+        Hinge2Vehicle.cpp
         ${BulletRESOURCES})
 
 target_link_libraries(magnum-bullet PRIVATE
@@ -87,6 +88,8 @@ target_link_libraries(magnum-bullet PRIVATE
     MagnumIntegration::Bullet
     MagnumIntegration::ImGui
     MagnumPlugins::AssimpImporter
+    MagnumPlugins::TinyGltfImporter
+    MagnumPlugins::PngImporter
     Magnum::TgaImporter
     Bullet::Collision
     Bullet::Dynamics)

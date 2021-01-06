@@ -40,7 +40,6 @@
 #include <Magnum/GL/Renderer.h>
 #include <Magnum/GL/Texture.h>
 #include <Magnum/GL/TextureFormat.h>
-#include <Magnum/Math/Color.h>
 #include <Magnum/MeshTools/Compile.h>
 #include <Magnum/Platform/Sdl2Application.h>
 #include <Magnum/SceneGraph/Camera.h>
@@ -206,8 +205,8 @@ ViewerExample::ViewerExample(const Arguments& arguments):
     for(UnsignedInt i = 0; i != importer->materialCount(); ++i) {
         Debug{} << "Importing material" << i << importer->materialName(i);
 
-        Containers::Optional<Trade::MaterialData> materialData = importer->material(i);
-        if(!materialData || !(materialData->types() & Trade::MaterialType::Phong)) {
+        Containers::Pointer<Trade::AbstractMaterialData> materialData = importer->material(i);
+        if(!materialData || materialData->type() != Trade::MaterialType::Phong) {
             Warning{} << "Cannot load material, skipping";
             continue;
         }
@@ -272,7 +271,7 @@ void ViewerExample::addObject(Trade::AbstractImporter& importer, Containers::Arr
 
         /* Textured material. If the texture failed to load, again just use a
            default colored material. */
-        } else if(materials[materialId]->hasAttribute(Trade::MaterialAttribute::DiffuseTexture)) {
+        } else if(materials[materialId]->flags() & Trade::PhongMaterialData::Flag::DiffuseTexture) {
             Containers::Optional<GL::Texture2D>& texture = _textures[materials[materialId]->diffuseTexture()];
             if(texture)
                 new TexturedDrawable{*object, _texturedShader, *_meshes[objectData->instance()], *texture, _drawables};
@@ -293,9 +292,7 @@ void ViewerExample::addObject(Trade::AbstractImporter& importer, Containers::Arr
 void ColoredDrawable::draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) {
     _shader
         .setDiffuseColor(_color)
-        .setLightPositions({
-            {camera.cameraMatrix().transformPoint({-3.0f, 10.0f, 10.0f}), 0.0f}
-        })
+        .setLightPosition(camera.cameraMatrix().transformPoint({-3.0f, 10.0f, 10.0f}))
         .setTransformationMatrix(transformationMatrix)
         .setNormalMatrix(transformationMatrix.normalMatrix())
         .setProjectionMatrix(camera.projectionMatrix())
@@ -304,9 +301,7 @@ void ColoredDrawable::draw(const Matrix4& transformationMatrix, SceneGraph::Came
 
 void TexturedDrawable::draw(const Matrix4& transformationMatrix, SceneGraph::Camera3D& camera) {
     _shader
-        .setLightPositions({
-            {camera.cameraMatrix().transformPoint({-3.0f, 10.0f, 10.0f}), 0.0f}
-        })
+        .setLightPosition(camera.cameraMatrix().transformPoint({-3.0f, 10.0f, 10.0f}))
         .setTransformationMatrix(transformationMatrix)
         .setNormalMatrix(transformationMatrix.normalMatrix())
         .setProjectionMatrix(camera.projectionMatrix())

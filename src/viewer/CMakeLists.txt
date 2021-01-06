@@ -55,8 +55,12 @@ target_link_libraries(magnum-viewer PRIVATE
     Magnum::Magnum
     Magnum::MeshTools
     Magnum::SceneGraph
+    Magnum::AnySceneImporter
     Magnum::Shaders
-    Magnum::Trade)
+    Magnum::Trade
+    MagnumPlugins::PngImporter
+    MagnumPlugins::TinyGltfImporter
+        )
 
 install(TARGETS magnum-viewer DESTINATION ${MAGNUM_BINARY_INSTALL_DIR})
 install(FILES scene.glb DESTINATION ${MAGNUM_DATA_INSTALL_DIR}/examples/viewer)
