@@ -82,6 +82,12 @@
 #include "TexturedTriangleShader.h"
 
 #include "learnopengl/filesystem.h"
+#include "learnopengl/shader_m.h"
+#include "stb_image.h"
+#include <iostream>
+
+using std::cout;
+using std::endl;
 
 #ifdef CORRADE_TARGET_ANDROID
 #include <Magnum/Platform/AndroidApplication.h>
@@ -187,7 +193,8 @@ namespace Magnum {
       Containers::Pointer<PluginManager::Manager<Trade::AbstractImporter>> _manager = nullptr;
 
       /* SKybox */
-      unsigned int _cubeMapTexture;
+      Shader *_skyboxShader;
+      unsigned int _cubeMapTexture, _skyboxVao;
 
       /* Imgui */
       ImGuiIntegration::Context _imgui{NoCreate};
@@ -626,7 +633,7 @@ namespace Magnum {
       _arcballCamera->reshape(event.windowSize(), event.framebufferSize());
 
       _projectionMatrix = Matrix4::perspectiveProjection(_arcballCamera->fov(),
-                                                         Vector2{event.framebufferSize()}.aspectRatio(), 0.01f, 100.0f);
+                                                         Vector2{event.framebufferSize()}.aspectRatio(), 0.001f, 1000.0f);
       _imgui.relayout(Vector2{event.windowSize()}/event.dpiScaling(),
                       event.windowSize(), event.framebufferSize());
       redraw();
@@ -1349,6 +1356,97 @@ namespace Magnum {
       }
     }
 
+    template <typename RESTYPE, typename INTYPE, int size>
+    RESTYPE getGlmMat4(const INTYPE &mat4) {
+      RESTYPE result(0.0f);
+      for (int i = 0; i < size; i++) {
+        for (int j = 0; j < size; j++) {
+          result[i][j] = mat4[i][j];
+        }
+      }
+      return result;
+    }
+
+
+// utility function for loading a 2D texture from file
+// ---------------------------------------------------
+    unsigned int loadTexture(char const * path)
+    {
+      unsigned int textureID;
+      glGenTextures(1, &textureID);
+
+      int width, height, nrComponents;
+      unsigned char *data = stbi_load(path, &width, &height, &nrComponents, 0);
+      if (data)
+      {
+        GLenum format;
+        if (nrComponents == 1)
+          format = GL_RED;
+        else if (nrComponents == 3)
+          format = GL_RGB;
+        else if (nrComponents == 4)
+          format = GL_RGBA;
+
+        glBindTexture(GL_TEXTURE_2D, textureID);
+        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        stbi_image_free(data);
+      }
+      else
+      {
+        std::cout << "Texture failed to load at path: " << path << std::endl;
+        stbi_image_free(data);
+      }
+
+      return textureID;
+    }
+
+    // loads a cubemap texture from 6 individual texture faces
+    // order:
+    // +X (right)
+    // -X (left)
+    // +Y (top)
+    // -Y (bottom)
+    // +Z (front)
+    // -Z (back)
+    // -------------------------------------------------------
+    unsigned int loadSimpleCubeMap(const std::vector<std::string> &faces)
+    {
+      unsigned int textureID;
+      glGenTextures(1, &textureID);
+      glBindTexture(GL_TEXTURE_CUBE_MAP, textureID);
+
+      int width, height, nrChannels;
+      for (unsigned int i = 0; i < faces.size(); i++)
+      {
+        unsigned char *data = stbi_load(faces[i].c_str(), &width, &height, &nrChannels, 0);
+        if (data)
+        {
+          glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+          stbi_image_free(data);
+        }
+        else
+        {
+          std::cout << "Cubemap texture failed to load at path: " << faces[i] << std::endl;
+          stbi_image_free(data);
+        }
+      }
+      glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+      return textureID;
+    }
+
+
     void BulletExample::initializeSkybox() {
       loadTextureFromImage("");
       Vector3                       _skyboxScaling{20.0f, 20.0f, 20.0f};
@@ -1448,6 +1546,24 @@ namespace Magnum {
         1.0f, -1.0f,  1.0f
       };
 
+
+      // build and compile shaders
+      // -------------------------
+      _skyboxShader = new Shader("/Users/xc5/CLionProjects/opengl/magnum-examples/src/bullet/6.1.skybox.vs",
+                                 "/Users/xc5/CLionProjects/opengl/magnum-examples/src/bullet/6.1.skybox.fs");
+      _skyboxShader->use();
+      _skyboxShader->setInt("skybox", 0);
+      // skybox VAO
+      unsigned int skyboxVAO, skyboxVBO;
+      glGenVertexArrays(1, &skyboxVAO);
+      glGenBuffers(1, &skyboxVBO);
+      glBindVertexArray(skyboxVAO);
+      glBindBuffer(GL_ARRAY_BUFFER, skyboxVBO);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(skyboxVertices), &skyboxVertices, GL_STATIC_DRAW);
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+      _skyboxVao = skyboxVAO;
+
       GL::Buffer buffer;
       buffer.setData(skyboxVertices);
       GL::Mesh &mesh = *(new GL::Mesh());
@@ -1464,11 +1580,32 @@ namespace Magnum {
     void BulletExample::drawSkybox() {
       GL::Renderer::setDepthFunction(GL::Renderer::DepthFunction::LessOrEqual);
       GL::Renderer::setFaceCullingMode(GL::Renderer::PolygonFacing::Front);
+
+      // draw skybox as last
+      glDepthFunc(GL_LEQUAL);  // change depth function so depth test passes when values are equal to depth buffer's content
+      _skyboxShader->use();
+      Matrix4 view = _arcballCamera->viewMatrix() * _arcballCamera->transformationMatrix(); // remove translation from the view matrix
+      Matrix4 proj = _projectionMatrix;
+
+      glm::mat4 viewglm = glm::mat4(1.0f);//getGlmMat4<glm::mat4, Matrix4, 4>(view);
+      glm::mat4 projglm = glm::mat4(1.0f);//getGlmMat4<glm::mat4, Matrix4, 4>(proj);
+      _skyboxShader->setMat4("view", viewglm);
+      _skyboxShader->setMat4("projection", projglm);
+
+      // skybox cube
+      glBindVertexArray(_skyboxVao);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_CUBE_MAP, _cubeMapTexture);
+      glDrawArrays(GL_TRIANGLES, 0, 36);
+      glBindVertexArray(0);
+      glDepthFunc(GL_LESS); // set depth function back to default
+
       _arcballCamera->draw(_skyboxGroup);
       GL::Renderer::setFaceCullingMode(GL::Renderer::PolygonFacing::Back);
     }
 
     unsigned int BulletExample::loadCubemap(std::vector<std::string> faces) {
+      _cubeMapTexture = loadSimpleCubeMap(faces);
       Containers::Pointer<Trade::AbstractImporter> importer = _manager->loadAndInstantiate("JpegImporter");
       if(!importer) std::exit(1);
       _skyboxTexture = GL::CubeMapTexture{};

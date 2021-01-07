@@ -70,6 +70,7 @@ add_executable(magnum-bullet WIN32
         ../arcball/ArcBall.cpp
         TexturedTriangleShader.cpp
         Hinge2Vehicle.cpp
+        stb_image.cpp
         ${BulletRESOURCES})
 
 target_link_libraries(magnum-bullet PRIVATE
