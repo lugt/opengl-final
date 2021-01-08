@@ -81,9 +81,13 @@
 
 #include "TexturedTriangleShader.h"
 
+// Learn opengl stuff
 #include "learnopengl/filesystem.h"
 #include "learnopengl/shader_m.h"
 #include "stb_image.h"
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
 #include <iostream>
 
 using std::cout;
@@ -158,6 +162,9 @@ namespace Magnum {
     class BulletExample : public Platform::Application {
     public:
       explicit BulletExample(const Arguments &arguments);
+      ~BulletExample() {
+        exit(0);
+      }
 
     private:
       GL::Mesh                        _box{NoCreate}, _sphere{NoCreate};
@@ -187,7 +194,7 @@ namespace Magnum {
                         _texturedShader{NoCreate};
       Shaders::Flat2D   _2dShader{NoCreate};
       Containers::Array<Containers::Optional<GL::Mesh>>      _meshes;
-      Containers::Array<Containers::Optional<GL::Texture2D>> _textures;
+      std::vector<Containers::Array<Containers::Optional<GL::Texture2D>> *> _allTextures;
       Object3D _manipulator;
       Containers::Pointer<Trade::AbstractImporter> _importer = nullptr;
       Containers::Pointer<PluginManager::Manager<Trade::AbstractImporter>> _manager = nullptr;
@@ -195,6 +202,14 @@ namespace Magnum {
       /* SKybox */
       Shader *_skyboxShader;
       unsigned int _cubeMapTexture, _skyboxVao;
+
+      /* Shadow Map */
+      unsigned int _planeVAO;
+      unsigned int _woodTexture, _depthMapFBO;
+      unsigned int _cubeVAO, _cubeVBO;
+      unsigned int _depthMap;
+
+      Shader *_mappingShader, *_simpleDepthShaderPtr, *_debugDepthQuadPtr;
 
       /* Imgui */
       ImGuiIntegration::Context _imgui{NoCreate};
@@ -216,8 +231,8 @@ namespace Magnum {
       Float _hueVal = 45.0f;
 
       /* Custom shader object */
-      GL::Mesh      _mesh{NoCreate};
-      GL::Texture2D _texture{NoCreate};
+      GL::Mesh      _cubeMesh{NoCreate};
+      GL::Texture2D _stoneTexture{NoCreate};
       GL::CubeMapTexture _skyboxTexture{NoCreate};
 
       Long _lastChecked = 0;
@@ -281,6 +296,7 @@ namespace Magnum {
 
       /* Viewer related */
       void addObject(Trade::AbstractImporter &importer,
+                     Containers::Array<Containers::Optional<GL::Texture2D>> &textures,
                      Containers::ArrayView
                        <const Containers::Optional<PhongMaterialData>> materials,
                      Object3D &parent, UnsignedInt i);
@@ -302,6 +318,10 @@ namespace Magnum {
       void drawSkybox();
 
       unsigned int loadCubemap(std::vector<std::string> vector);
+      void initializeShadowMapping();
+      void drawShadowMapping();
+      void renderScene(const Shader &shader);
+      void renderCube();
     };
 
     class ColoredDrawable : public SceneGraph::Drawable3D {
@@ -440,8 +460,11 @@ namespace Magnum {
                           Matrix4::scaling({20.0f, 0.5f, 20.0f}), _drawables};
 
       initializeRoboTank();
-      initializeCustomModel();
+      // initializeCustomModel();
+      initializeShadowMapping();
       initializeSkybox();
+
+      // _profiler.enable();
 
       /* Create boxes with random colors */
       Deg      hue = 42.0_degf;
@@ -472,12 +495,21 @@ namespace Magnum {
     void BulletExample::drawEvent() {
       GL::defaultFramebuffer.clear(GL::FramebufferClear::Color | GL::FramebufferClear::Depth);
 
+      /* Setup the renderer so we can draw the debug lines on top */
+      GL::Renderer::enable(GL::Renderer::Feature::DepthTest);
+      GL::Renderer::enable(GL::Renderer::Feature::FaceCulling);
+      GL::Renderer::enable(GL::Renderer::Feature::PolygonOffsetFill);
+      GL::Renderer::setPolygonOffset(2.0f, 0.5f);
+
       /* Housekeeping: remove any objects which are far away from the origin */
       for (Object3D *obj = _scene.children().first(); obj;) {
         Object3D *next = obj->nextSibling();
         if (obj->transformation().translation().dot() > 200 * 200) {
           // obj->transformation().translation() = Vector3{5.0, 1.0, 5.0};
-          delete obj;
+          if (_arcballCamera->getCameraObjectPtr() == (void *) obj) {
+          } else {
+            //delete obj;
+          }
         }
 
         obj = next;
@@ -546,12 +578,18 @@ namespace Magnum {
         }
       }
 
+      // No need for this now.
+      autoShoot();
+
       // Blending
+      // Shadow Mapping
+      //drawShadowMapping();
 
       /* Draw the skybox */
       drawSkybox();
+
+      /* Imgui*/
       drawImgui();
-      autoShoot();
 
       /* Update camera before drawing instances */
       bool moving = _arcballCamera->updateTransformation();
@@ -633,7 +671,8 @@ namespace Magnum {
       _arcballCamera->reshape(event.windowSize(), event.framebufferSize());
 
       _projectionMatrix = Matrix4::perspectiveProjection(_arcballCamera->fov(),
-                                                         Vector2{event.framebufferSize()}.aspectRatio(), 0.001f, 1000.0f);
+                                                         Vector2{event.framebufferSize()}.aspectRatio(),
+                                                         0.01f, 100.0f);
       _imgui.relayout(Vector2{event.windowSize()}/event.dpiScaling(),
                       event.windowSize(), event.framebufferSize());
       redraw();
@@ -755,7 +794,6 @@ namespace Magnum {
             Debug{} << "Collision detection using brute force";
           /* Reset the profiler to avoid measurements of the two methods mixed
              together */
-          if(_profiler.isEnabled()) _profiler.enable();
         }
         if(ImGui::Button("Profiler enabling")) {
           if(_profiler.isEnabled()) _profiler.disable();
@@ -919,9 +957,9 @@ namespace Magnum {
         //        robotank->rigidBody().setCollisionFlags( robotank->rigidBody().getCollisionFlags() |
         //                                                 btCollisionObject::CF_KINEMATIC_OBJECT);
         //        robotank->rigidBody().setActivationState(DISABLE_DEACTIVATION);
-        new ColoredDrawable{*robotank, _boxInstanceData, Color3::fromHsv(
-                            {hue += 137.5_degf, 0.75f, 0.9f}),
-                            Matrix4::scaling({1.0f, 0.5f, 0.5f}), _drawables};
+//        new ColoredDrawable{*robotank, _boxInstanceData, Color3::fromHsv(
+//                            {hue += 137.5_degf, 0.75f, 0.9f}),
+//                            Matrix4::scaling({1.0f, 0.5f, 0.5f}), _drawables};
 
         robotank->translate(cur_position);
         parent_position = cur_position;
@@ -932,8 +970,8 @@ namespace Magnum {
 
       // initialize some walls;
       Vector3 _xshape = {5.0, 5.0, 0.5};
-      createWall(_xshape, Vector3{2.5f, 5.0f, 5.0f});
-      createWall(_xshape, Vector3{2.5f, 5.0f, 10.0f});
+      createWall(_xshape, Vector3{2.5f, 5.0f, -20.0f});
+      createWall(_xshape, Vector3{2.5f, 5.0f, -30.0f});
       createWall(_xshape, Vector3{6.5f, 5.0f, 12.0f});
       createWall(_xshape, Vector3{6.5f, 5.0f, 16.0f});
 
@@ -1003,11 +1041,13 @@ namespace Magnum {
       } else {
         yspeed = 0.0;
       }
+      RigidBody *rigidBody = (RigidBody*) _stackedRoboTank[0];
       if (_directionsPressed[0] || _directionsPressed[1]
        || _directionsPressed[2] || _directionsPressed[3] || _directionsPressed[4]) {
-        RigidBody *rigidBody = (RigidBody*) _stackedRoboTank[0];
         rigidBody->rigidBody().setLinearVelocity(btVector3{xspeed, yspeed, zspeed});
       }
+      _manipulator.resetTransformation();
+      _manipulator.setTransformation(Matrix4::translation(rigidBody->transformation().translation()));
     }
 
     RigidBody *BulletExample::getRootRigidBody() {
@@ -1015,6 +1055,7 @@ namespace Magnum {
     }
 
     void BulletExample::addObject(Trade::AbstractImporter &importer,
+                                  Containers::Array<Containers::Optional<GL::Texture2D>> &currentTextures,
                                   Containers::ArrayView<const Containers::Optional<Trade::PhongMaterialData>> materials,
                                   Object3D &parent, UnsignedInt i) {
       Debug{} << "Importing object" << i << importer.object3DName(i);
@@ -1029,7 +1070,9 @@ namespace Magnum {
       object->setTransformation(objectData->transformation());
 
       /* Add a drawable if the object has a mesh and the mesh is loaded */
-      if(objectData->instanceType() == Trade::ObjectInstanceType3D::Mesh && objectData->instance() != -1 && _meshes[objectData->instance()]) {
+      if(objectData->instanceType() == Trade::ObjectInstanceType3D::Mesh
+      && objectData->instance() != -1
+      && _meshes[objectData->instance()]) {
         const Int materialId = static_cast<Trade::MeshObjectData3D*>(objectData.get())->material();
 
         /* Material not available / not loaded, use a default material */
@@ -1039,7 +1082,7 @@ namespace Magnum {
           /* Textured material. If the texture failed to load, again just use a
              default colored material. */
         } else if(materials[materialId]->flags() & Trade::PhongMaterialData::Flag::DiffuseTexture) {
-          Containers::Optional<GL::Texture2D>& texture = _textures[materials[materialId]->diffuseTexture()];
+          Containers::Optional<GL::Texture2D>& texture = currentTextures[materials[materialId]->diffuseTexture()];
           if(texture)
             new TexturedDrawable{*object, _texturedShader, *_meshes[objectData->instance()], *texture, _drawables};
           else
@@ -1053,7 +1096,7 @@ namespace Magnum {
 
       /* Recursively add children */
       for(std::size_t id: objectData->children())
-        addObject(importer, materials, *object, id);
+        addObject(importer, currentTextures, materials, *object, id);
     }
 
     void BulletExample::prepareShaders() {
@@ -1076,11 +1119,12 @@ namespace Magnum {
         .setSpecularColor(0xffffff_rgbf)
         .setShininess(80.0f);
 
-      _texturedShader = Shaders::Phong{Shaders::Phong::Flag::DiffuseTexture};
+      _texturedShader = Shaders::Phong{Shaders::Phong::Flag::DiffuseTexture, 1};
       _texturedShader
+        .setLightPosition({0.0f, 0.0f, 0.0f})
         .setAmbientColor(0x111111_rgbf)
-        .setSpecularColor(0x111111_rgbf)
-        .setShininess(80.0f);
+        .setSpecularColor(0xffffff_rgbf)
+        .setShininess(100.0f);
 
       _customShader = TexturedTriangleShader();
     }
@@ -1096,7 +1140,8 @@ namespace Magnum {
         _arcballCamera->setLagging(0.85f);
 
         _projectionMatrix = Matrix4::perspectiveProjection(fov,
-                                                           Vector2{framebufferSize()}.aspectRatio(), 0.01f, 100.0f);
+                                                           Vector2{framebufferSize()}.aspectRatio(),
+                                                           0.01f, 100.0f);
       }
     }
 
@@ -1126,6 +1171,9 @@ namespace Magnum {
     void BulletExample::importRealFile(const std::string filename, Object3D &parent) {
       /* Load a scene importer plugin */
 
+      _importer = _manager->loadAndInstantiate("AnySceneImporter");
+      if(!_importer) std::exit(1);
+
       Debug{} << "Opening file" << filename;
 
       /* Load file */
@@ -1139,7 +1187,9 @@ namespace Magnum {
       //      }
 
       // Textures
-      _textures = Containers::Array<Containers::Optional<GL::Texture2D>>{_importer->textureCount()};
+      Containers::Array<Containers::Optional<GL::Texture2D>> &_textures =
+        *new Containers::Array<Containers::Optional<GL::Texture2D>>{_importer->textureCount()};
+      _allTextures.push_back(&_textures);
       for(UnsignedInt i = 0; i != _importer->textureCount(); ++i) {
         Debug{} << "Importing texture" << i << _importer->textureName(i);
 
@@ -1164,7 +1214,7 @@ namespace Magnum {
         }
 
         /* Configure the texture */
-        GL::Texture2D texture;
+        GL::Texture2D &texture = *new GL::Texture2D();
         texture
           .setMagnificationFilter(textureData->magnificationFilter())
           .setMinificationFilter(textureData->minificationFilter(), textureData->mipmapFilter())
@@ -1219,7 +1269,7 @@ namespace Magnum {
 
         /* Recursively add all children */
         for(UnsignedInt objectId: sceneData->children3D())
-          addObject(*_importer, materials, parent, objectId);
+          addObject(*_importer, _textures, materials, parent, objectId);
 
         /* The format has no scene support, display just the first loaded mesh with
            a default material and be done with it */
@@ -1242,44 +1292,6 @@ namespace Magnum {
     }
 
     void BulletExample::initializeCustomModel() {
-      struct TriangleVertex {
-        Vector2 position;
-        Vector2 textureCoordinates;
-      };
-      const TriangleVertex data[]{
-        {{-0.5f, -0.5f}, {0.0f, 0.0f}}, /* Left position and texture coordinate */
-        {{ 0.5f, -0.5f}, {1.0f, 0.0f}}, /* Right position and texture coordinate */
-        {{ 0.0f,  0.5f}, {0.5f, 1.0f}}  /* Top position and texture coordinate */
-      };
-
-      GL::Buffer buffer;
-      buffer.setData(data);
-      _mesh = GL::Mesh{};
-      _mesh.setCount(3)
-        .addVertexBuffer(std::move(buffer), 0,
-                         TexturedTriangleShader::Position{},
-                         TexturedTriangleShader::TextureCoordinates{});
-
-      /* Load TGA importer plugin */
-      PluginManager::Manager<Trade::AbstractImporter> manager;
-      Containers::Pointer<Trade::AbstractImporter> importer =
-                                                        manager.loadAndInstantiate("TgaImporter");
-      if(!importer) std::exit(1);
-
-      /* Load the texture */
-      const Utility::Resource rs{"textured-triangle-data"};
-      if(!importer->openData(rs.getRaw("stone.tga")))
-        std::exit(2);
-
-      /* Set texture data and parameters */
-      Containers::Optional<Trade::ImageData2D> image = importer->image2D(0);
-      CORRADE_INTERNAL_ASSERT(image);
-      _texture = GL::Texture2D{};
-      _texture.setWrapping(GL::SamplerWrapping::ClampToEdge)
-        .setMagnificationFilter(GL::SamplerFilter::Linear)
-        .setMinificationFilter(GL::SamplerFilter::Linear)
-        .setStorage(1, GL::textureFormat(image->format()), image->size())
-        .setSubImage(0, {}, *image);
     }
 
     void BulletExample::loadTextureFromImage(const std::string & filename) {
@@ -1294,7 +1306,7 @@ namespace Magnum {
       /* Set texture data and parameters */
       Containers::Optional<Trade::ImageData2D> image = importer->image2D(0);
       CORRADE_INTERNAL_ASSERT(image);
-      _texture.setWrapping(GL::SamplerWrapping::ClampToEdge)
+      _stoneTexture.setWrapping(GL::SamplerWrapping::ClampToEdge)
         .setMagnificationFilter(GL::SamplerFilter::Linear)
         .setMinificationFilter(GL::SamplerFilter::Linear)
         .setStorage(1, GL::textureFormat(image->format()), image->size())
@@ -1311,49 +1323,6 @@ namespace Magnum {
        };
 
       loadCubemap(faces);
-      return;
-
-      /* Load file */
-      if(!_importer->openFile(filename))
-        std::exit(4);
-
-      /* Load all textures. Textures that fail to load will be NullOpt. */
-      _textures = Containers::Array<Containers::Optional<GL::Texture2D>>{_importer->textureCount()};
-      for(UnsignedInt i = 0; i != _importer->textureCount(); ++i) {
-        Debug{} << "Importing texture" << i << _importer->textureName(i);
-
-        Containers::Optional<Trade::TextureData> textureData = _importer->texture(i);
-        if(!textureData || textureData->type() != Trade::TextureData::Type::Texture2D) {
-          Warning{} << "Cannot load texture properties, skipping";
-          continue;
-        }
-
-        UnsignedInt imageId = textureData->image();
-        Debug{} << "Importing image" << imageId << _importer->image2DName(imageId);
-
-        Containers::Optional<Trade::ImageData2D> imageData = _importer->image2D(imageId);
-        GL::TextureFormat format;
-        if(imageData && imageData->format() == PixelFormat::RGB8Unorm)
-          format = GL::TextureFormat::RGB8;
-        else if(imageData && imageData->format() == PixelFormat::RGBA8Unorm)
-          format = GL::TextureFormat::RGBA8;
-        else {
-          Warning{} << "Cannot load texture image, skipping";
-          continue;
-        }
-
-        /* Configure the texture */
-        GL::Texture2D texture;
-        texture
-          .setMagnificationFilter(textureData->magnificationFilter())
-          .setMinificationFilter(textureData->minificationFilter(), textureData->mipmapFilter())
-          .setWrapping(textureData->wrapping().xy())
-          .setStorage(Math::log2(imageData->size().max()) + 1, format, imageData->size())
-          .setSubImage(0, {}, *imageData)
-          .generateMipmap();
-
-        _textures[i] = std::move(texture);
-      }
     }
 
     template <typename RESTYPE, typename INTYPE, int size>
@@ -1579,16 +1548,19 @@ namespace Magnum {
 
     void BulletExample::drawSkybox() {
       GL::Renderer::setDepthFunction(GL::Renderer::DepthFunction::LessOrEqual);
-      GL::Renderer::setFaceCullingMode(GL::Renderer::PolygonFacing::Front);
+//      GL::Renderer::setFaceCullingMode(GL::Renderer::PolygonFacing::Front);
 
       // draw skybox as last
-      glDepthFunc(GL_LEQUAL);  // change depth function so depth test passes when values are equal to depth buffer's content
+//      glDepthFunc(GL_LEQUAL);  // change depth function so depth test passes when values are equal to depth buffer's content
       _skyboxShader->use();
-      Matrix4 view = _arcballCamera->viewMatrix() * _arcballCamera->transformationMatrix(); // remove translation from the view matrix
+      Matrix4 view = _arcballCamera->viewMatrix(); //* _arcballCamera->transformationMatrix(); // remove translation from the view matrix
       Matrix4 proj = _projectionMatrix;
 
-      glm::mat4 viewglm = glm::mat4(1.0f);//getGlmMat4<glm::mat4, Matrix4, 4>(view);
-      glm::mat4 projglm = glm::mat4(1.0f);//getGlmMat4<glm::mat4, Matrix4, 4>(proj);
+      view = Matrix4(view.rotationScaling());
+      proj = Matrix4(proj.rotationScaling());
+
+      glm::mat4 viewglm = getGlmMat4<glm::mat4, Matrix4, 4>(view);
+      glm::mat4 projglm = getGlmMat4<glm::mat4, Matrix4, 4>(proj); // glm::mat4(1.0f);//getGlmMat4<glm::mat4, Matrix4, 4>(proj);
       _skyboxShader->setMat4("view", viewglm);
       _skyboxShader->setMat4("projection", projglm);
 
@@ -1597,11 +1569,11 @@ namespace Magnum {
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_CUBE_MAP, _cubeMapTexture);
       glDrawArrays(GL_TRIANGLES, 0, 36);
-      glBindVertexArray(0);
-      glDepthFunc(GL_LESS); // set depth function back to default
+      // glDepthFunc(GL_LESS); // set depth function back to default
+      GL::Renderer::setDepthFunction(GL::Renderer::DepthFunction::Less);
 
-      _arcballCamera->draw(_skyboxGroup);
-      GL::Renderer::setFaceCullingMode(GL::Renderer::PolygonFacing::Back);
+      // _arcballCamera->draw(_skyboxGroup);
+      //GL::Renderer::setFaceCullingMode(GL::Renderer::PolygonFacing::Back);
     }
 
     unsigned int BulletExample::loadCubemap(std::vector<std::string> faces) {
@@ -1632,6 +1604,247 @@ namespace Magnum {
         i++;
       }
       return 0;
+    }
+
+    void BulletExample::initializeShadowMapping() {
+
+      // build and compile shaders
+      // -------------------------
+      _mappingShader = new Shader(FileSystem::getPath("b/3.1.3.shadow_mapping.vs").c_str(),
+                                  FileSystem::getPath("b/3.1.3.shadow_mapping.fs").c_str());
+      Shader &shader = *_mappingShader;
+      Shader &simpleDepthShader = *new Shader(FileSystem::getPath("b/3.1.3.shadow_mapping_depth.vs").c_str(),
+                                              FileSystem::getPath("b/3.1.3.shadow_mapping_depth.fs").c_str());
+      Shader &debugDepthQuad = *new Shader(FileSystem::getPath("b/3.1.3.debug_quad.vs").c_str(),
+                                           FileSystem::getPath("b/3.1.3.debug_quad_depth.fs").c_str());
+      _simpleDepthShaderPtr = &simpleDepthShader;
+      _debugDepthQuadPtr = &debugDepthQuad;
+
+      // set up vertex data (and buffer(s)) and configure vertex attributes
+      // ------------------------------------------------------------------
+      float planeVertices[] = {
+        // positions            // normals         // texcoords
+        25.0f, -0.5f,  25.0f,  0.0f, 1.0f, 0.0f,  25.0f,  0.0f,
+        -25.0f, -0.5f,  25.0f,  0.0f, 1.0f, 0.0f,   0.0f,  0.0f,
+        -25.0f, -0.5f, -25.0f,  0.0f, 1.0f, 0.0f,   0.0f, 25.0f,
+
+        25.0f, -0.5f,  25.0f,  0.0f, 1.0f, 0.0f,  25.0f,  0.0f,
+        -25.0f, -0.5f, -25.0f,  0.0f, 1.0f, 0.0f,   0.0f, 25.0f,
+        25.0f, -0.5f, -25.0f,  0.0f, 1.0f, 0.0f,  25.0f, 25.0f
+      };
+      // plane VAO
+      unsigned int planeVBO;
+      glGenVertexArrays(1, &_planeVAO);
+      glGenBuffers(1, &planeVBO);
+      glBindVertexArray(_planeVAO);
+      glBindBuffer(GL_ARRAY_BUFFER, planeVBO);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(planeVertices), planeVertices, GL_STATIC_DRAW);
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+      glEnableVertexAttribArray(1);
+      glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+      glEnableVertexAttribArray(2);
+      glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+      glBindVertexArray(0);
+
+      // load textures
+      // -------------
+      unsigned int _woodTexture = loadTexture(FileSystem::getPath("resources/textures/wood.png").c_str());
+
+      // configure depth map FBO
+      // -----------------------
+      const unsigned int SHADOW_WIDTH = 1024, SHADOW_HEIGHT = 1024;
+      glGenFramebuffers(1, &_depthMapFBO);
+      // create depth texture
+      unsigned int &depthMap = _depthMap;
+      glGenTextures(1, &depthMap);
+      glBindTexture(GL_TEXTURE_2D, depthMap);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, SHADOW_WIDTH, SHADOW_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+      float borderColor[] = { 1.0, 1.0, 1.0, 1.0 };
+      glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
+      // attach depth texture as FBO's depth buffer
+      glBindFramebuffer(GL_FRAMEBUFFER, _depthMapFBO);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthMap, 0);
+      glDrawBuffer(GL_NONE);
+      glReadBuffer(GL_NONE);
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+
+      // shader configuration
+      // --------------------
+      shader.use();
+      shader.setInt("diffuseTexture", 0);
+      shader.setInt("shadowMap", 1);
+      debugDepthQuad.use();
+      debugDepthQuad.setInt("depthMap", 0);
+
+    }
+
+    // renders the 3D scene
+    // --------------------
+    void BulletExample::renderScene(const Shader &shader)
+    {
+      // floor
+      glm::mat4 model = glm::mat4(1.0f);
+      shader.setMat4("model", model);
+      glBindVertexArray(_planeVAO);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+      // cubes
+      model = glm::mat4(1.0f);
+      model = glm::translate(model, glm::vec3(0.0f, 1.5f, 0.0));
+      model = glm::scale(model, glm::vec3(0.5f));
+      shader.setMat4("model", model);
+      renderCube();
+      model = glm::mat4(1.0f);
+      model = glm::translate(model, glm::vec3(2.0f, 0.0f, 1.0));
+      model = glm::scale(model, glm::vec3(0.5f));
+      shader.setMat4("model", model);
+      renderCube();
+      model = glm::mat4(1.0f);
+      model = glm::translate(model, glm::vec3(-1.0f, 0.0f, 2.0));
+      model = glm::rotate(model, glm::radians(60.0f), glm::normalize(glm::vec3(1.0, 0.0, 1.0)));
+      model = glm::scale(model, glm::vec3(0.25));
+      shader.setMat4("model", model);
+      renderCube();
+    }
+
+    void BulletExample::renderCube()
+    {
+      // initialize (if necessary)
+      if (_cubeVAO == 0)
+      {
+        float vertices[] = {
+          // back face
+          -1.0f, -1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 0.0f, 0.0f, // bottom-left
+          1.0f,  1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 1.0f, 1.0f, // top-right
+          1.0f, -1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 1.0f, 0.0f, // bottom-right
+          1.0f,  1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 1.0f, 1.0f, // top-right
+          -1.0f, -1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 0.0f, 0.0f, // bottom-left
+          -1.0f,  1.0f, -1.0f,  0.0f,  0.0f, -1.0f, 0.0f, 1.0f, // top-left
+          // front face
+          -1.0f, -1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f, 0.0f, // bottom-left
+          1.0f, -1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 1.0f, 0.0f, // bottom-right
+          1.0f,  1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 1.0f, 1.0f, // top-right
+          1.0f,  1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 1.0f, 1.0f, // top-right
+          -1.0f,  1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f, 1.0f, // top-left
+          -1.0f, -1.0f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f, 0.0f, // bottom-left
+          // left face
+          -1.0f,  1.0f,  1.0f, -1.0f,  0.0f,  0.0f, 1.0f, 0.0f, // top-right
+          -1.0f,  1.0f, -1.0f, -1.0f,  0.0f,  0.0f, 1.0f, 1.0f, // top-left
+          -1.0f, -1.0f, -1.0f, -1.0f,  0.0f,  0.0f, 0.0f, 1.0f, // bottom-left
+          -1.0f, -1.0f, -1.0f, -1.0f,  0.0f,  0.0f, 0.0f, 1.0f, // bottom-left
+          -1.0f, -1.0f,  1.0f, -1.0f,  0.0f,  0.0f, 0.0f, 0.0f, // bottom-right
+          -1.0f,  1.0f,  1.0f, -1.0f,  0.0f,  0.0f, 1.0f, 0.0f, // top-right
+          // right face
+          1.0f,  1.0f,  1.0f,  1.0f,  0.0f,  0.0f, 1.0f, 0.0f, // top-left
+          1.0f, -1.0f, -1.0f,  1.0f,  0.0f,  0.0f, 0.0f, 1.0f, // bottom-right
+          1.0f,  1.0f, -1.0f,  1.0f,  0.0f,  0.0f, 1.0f, 1.0f, // top-right
+          1.0f, -1.0f, -1.0f,  1.0f,  0.0f,  0.0f, 0.0f, 1.0f, // bottom-right
+          1.0f,  1.0f,  1.0f,  1.0f,  0.0f,  0.0f, 1.0f, 0.0f, // top-left
+          1.0f, -1.0f,  1.0f,  1.0f,  0.0f,  0.0f, 0.0f, 0.0f, // bottom-left
+          // bottom face
+          -1.0f, -1.0f, -1.0f,  0.0f, -1.0f,  0.0f, 0.0f, 1.0f, // top-right
+          1.0f, -1.0f, -1.0f,  0.0f, -1.0f,  0.0f, 1.0f, 1.0f, // top-left
+          1.0f, -1.0f,  1.0f,  0.0f, -1.0f,  0.0f, 1.0f, 0.0f, // bottom-left
+          1.0f, -1.0f,  1.0f,  0.0f, -1.0f,  0.0f, 1.0f, 0.0f, // bottom-left
+          -1.0f, -1.0f,  1.0f,  0.0f, -1.0f,  0.0f, 0.0f, 0.0f, // bottom-right
+          -1.0f, -1.0f, -1.0f,  0.0f, -1.0f,  0.0f, 0.0f, 1.0f, // top-right
+          // top face
+          -1.0f,  1.0f, -1.0f,  0.0f,  1.0f,  0.0f, 0.0f, 1.0f, // top-left
+          1.0f,  1.0f , 1.0f,  0.0f,  1.0f,  0.0f, 1.0f, 0.0f, // bottom-right
+          1.0f,  1.0f, -1.0f,  0.0f,  1.0f,  0.0f, 1.0f, 1.0f, // top-right
+          1.0f,  1.0f,  1.0f,  0.0f,  1.0f,  0.0f, 1.0f, 0.0f, // bottom-right
+          -1.0f,  1.0f, -1.0f,  0.0f,  1.0f,  0.0f, 0.0f, 1.0f, // top-left
+          -1.0f,  1.0f,  1.0f,  0.0f,  1.0f,  0.0f, 0.0f, 0.0f  // bottom-left
+        };
+        glGenVertexArrays(1, &_cubeVAO);
+        glGenBuffers(1, &_cubeVBO);
+        // fill buffer
+        glBindBuffer(GL_ARRAY_BUFFER, _cubeVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        // link vertex attributes
+        glBindVertexArray(_cubeVAO);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+      }
+      // render Cube
+      glBindVertexArray(_cubeVAO);
+      glDrawArrays(GL_TRIANGLES, 0, 36);
+      glBindVertexArray(0);
+    }
+
+    void BulletExample::drawShadowMapping() {
+      Shader &shader = *_mappingShader;
+      Shader &simpleDepthShader = *_simpleDepthShaderPtr;
+      Shader &debugDepthQuad = *_debugDepthQuadPtr;
+
+      // 1. render depth of scene to texture (from light's perspective)
+      // --------------------------------------------------------------
+      glm::mat4 lightProjection, lightView;
+      glm::mat4 lightSpaceMatrix;
+      float near_plane = 1.0f, far_plane = 7.5f;
+
+      //lightProjection = glm::perspective(glm::radians(45.0f), (GLfloat)SHADOW_WIDTH / (GLfloat)SHADOW_HEIGHT, near_plane, far_plane);
+      // note that if you use a perspective projection matrix you'll
+      // have to change the light position as the current light position
+      // isn't enough to reflect the whole scene
+      lightProjection = glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, near_plane, far_plane);
+      lightView = glm::lookAt(glm::make_vec3(_lightRealPosition.data()), glm::vec3(0.0f), glm::vec3(0.0, 1.0, 0.0));
+      lightSpaceMatrix = lightProjection * lightView;
+      // render scene from light's point of view
+      simpleDepthShader.use();
+      simpleDepthShader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
+
+      glBindFramebuffer(GL_FRAMEBUFFER, _depthMapFBO);
+//      glClear(GL_DEPTH_BUFFER_BIT);
+
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, _woodTexture);
+      renderScene(simpleDepthShader);
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+      // reset viewport
+//      glViewport(0, 0, windowSize().x(), windowSize().y());
+//      glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+      // 2. render scene as normal using the generated depth/shadow map
+      // --------------------------------------------------------------
+//      glViewport(0, 0, windowSize().x(), windowSize().y());
+//      glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+      shader.use();
+      glm::mat4 projection = getGlmMat4<glm::mat4, Matrix4, 4>(_projectionMatrix);
+      glm::mat4 view = getGlmMat4<glm::mat4, Matrix4, 4>(_arcballCamera->viewMatrix());
+      shader.setMat4("projection", projection);
+      shader.setMat4("view", view);
+      // set light uniforms
+      shader.setVec3("viewPos", glm::make_vec3(_arcballCamera->transformation().translation().data()));
+      shader.setVec3("lightPos", glm::make_vec3(_lightRealPosition.data()));
+      shader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, _woodTexture);
+      glActiveTexture(GL_TEXTURE1);
+      glBindTexture(GL_TEXTURE_2D, _depthMap);
+      renderScene(shader);
+
+      // render Depth map to quad for visual debugging
+      // ---------------------------------------------
+      debugDepthQuad.use();
+      debugDepthQuad.setFloat("near_plane", near_plane);
+      debugDepthQuad.setFloat("far_plane", far_plane);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, _depthMap);
+      //renderQuad();
+
     }
   }
 }
